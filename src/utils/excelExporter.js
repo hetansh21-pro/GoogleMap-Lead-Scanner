@@ -22,7 +22,7 @@ export async function downloadExcel(leads = [], filenamePrefix = 'LeadMap_Pro_Le
   const withEmailCount = leads.filter(l => l.email && l.email !== 'Not Listed').length;
 
   // --- 1. TITLE BANNER HEADER (Rows 1 - 3) ---
-  worksheet.mergeCells('A1:N1');
+  worksheet.mergeCells('A1:J1');
   const titleCell = worksheet.getCell('A1');
   titleCell.value = 'LEADMAP PRO — QUALIFIED B2B LEADS REPORT';
   titleCell.font = { name: 'Calibri', size: 16, bold: true, color: { argb: 'FFFFFF' } };
@@ -30,7 +30,7 @@ export async function downloadExcel(leads = [], filenamePrefix = 'LeadMap_Pro_Le
   titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
   worksheet.getRow(1).height = 32;
 
-  worksheet.mergeCells('A2:N2');
+  worksheet.mergeCells('A2:J2');
   const subtitleCell = worksheet.getCell('A2');
   subtitleCell.value = `Generated on: ${new Date().toLocaleString()} | Verified Business Contacts & Prospecting Data`;
   subtitleCell.font = { name: 'Calibri', size: 10, italic: true, color: { argb: '94A3B8' } };
@@ -95,11 +95,7 @@ export async function downloadExcel(leads = [], filenamePrefix = 'LeadMap_Pro_Le
     'Category',
     'Rating',
     'Reviews',
-    'Full Address',
-    'Opening Hours',
-    'Price Range',
-    'Worker Thread',
-    'Scraped At'
+    'Full Address'
   ];
 
   const colWidths = [
@@ -112,11 +108,7 @@ export async function downloadExcel(leads = [], filenamePrefix = 'LeadMap_Pro_Le
     { wch: 26 },  // Category
     { wch: 10 },  // Rating
     { wch: 14 },  // Reviews
-    { wch: 45 },  // Full Address
-    { wch: 22 },  // Opening Hours
-    { wch: 15 },  // Price Range
-    { wch: 16 },  // Worker Thread
-    { wch: 18 }   // Scraped At
+    { wch: 45 }   // Full Address
   ];
 
   // Set column widths
@@ -164,11 +156,7 @@ export async function downloadExcel(leads = [], filenamePrefix = 'LeadMap_Pro_Le
       lead.category || 'N/A',
       ratingVal,
       lead.reviews || '0',
-      lead.address || 'N/A',
-      lead.openingHours || 'Not Listed',
-      lead.priceRange || 'N/A',
-      `Worker #${lead.workerId || 1}`,
-      lead.scrapedAt || new Date().toLocaleTimeString()
+      lead.address || 'N/A'
     ];
 
     // Alternating zebra striping color
@@ -187,8 +175,8 @@ export async function downloadExcel(leads = [], filenamePrefix = 'LeadMap_Pro_Le
         right: { style: 'thin', color: { argb: 'E2E8F0' } }
       };
 
-      // Center align specific columns (#, Has Website, Rating, Reviews, Worker Thread, Scraped At, Price Range)
-      if ([1, 5, 8, 9, 12, 13, 14].includes(colNumber)) {
+      // Center align specific columns (#, Has Website, Rating, Reviews)
+      if ([1, 5, 8, 9].includes(colNumber)) {
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
       }
 
@@ -263,7 +251,7 @@ export async function downloadExcel(leads = [], filenamePrefix = 'LeadMap_Pro_Le
   summaryCell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: '0F172A' } };
   summaryCell.alignment = { horizontal: 'left', vertical: 'middle' };
 
-  for (let c = 1; c <= 14; c++) {
+  for (let c = 1; c <= 10; c++) {
     const cell = footerRow.getCell(c);
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'E2E8F0' } };
     cell.border = {

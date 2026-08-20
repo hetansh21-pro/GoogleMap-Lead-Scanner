@@ -1070,7 +1070,7 @@ app.get('/api/export/excel', async (req, res) => {
     const withEmailCount = leads.filter(l => l.email && l.email !== 'Not Listed').length;
 
     // --- 1. BANNER HEADER ---
-    worksheet.mergeCells('A1:N1');
+    worksheet.mergeCells('A1:J1');
     const titleCell = worksheet.getCell('A1');
     titleCell.value = 'LEADMAP PRO — QUALIFIED B2B LEADS REPORT';
     titleCell.font = { name: 'Calibri', size: 16, bold: true, color: { argb: 'FFFFFF' } };
@@ -1078,7 +1078,7 @@ app.get('/api/export/excel', async (req, res) => {
     titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
     worksheet.getRow(1).height = 32;
 
-    worksheet.mergeCells('A2:N2');
+    worksheet.mergeCells('A2:J2');
     const subtitleCell = worksheet.getCell('A2');
     subtitleCell.value = `Generated on: ${new Date().toLocaleString()} | Verified Business Contacts & Prospecting Data`;
     subtitleCell.font = { name: 'Calibri', size: 10, italic: true, color: { argb: '94A3B8' } };
@@ -1140,18 +1140,13 @@ app.get('/api/export/excel', async (req, res) => {
       'Category',
       'Rating',
       'Reviews',
-      'Full Address',
-      'Opening Hours',
-      'Price Range',
-      'Worker Thread',
-      'Scraped At'
+      'Full Address'
     ];
 
     const colWidths = [
       { wch: 6 },   { wch: 32 },  { wch: 22 },  { wch: 30 },
       { wch: 24 },  { wch: 38 },  { wch: 26 },  { wch: 10 },
-      { wch: 14 },  { wch: 45 },  { wch: 22 },  { wch: 15 },
-      { wch: 16 },  { wch: 18 }
+      { wch: 14 },  { wch: 45 }
     ];
 
     colWidths.forEach((col, idx) => {
@@ -1197,11 +1192,7 @@ app.get('/api/export/excel', async (req, res) => {
         lead.category || 'N/A',
         ratingVal,
         lead.reviews || '0',
-        lead.address || 'N/A',
-        lead.openingHours || 'Not Listed',
-        lead.priceRange || 'N/A',
-        `Worker #${lead.workerId || 1}`,
-        lead.scrapedAt || new Date().toLocaleTimeString()
+        lead.address || 'N/A'
       ];
 
       const isEven = idx % 2 === 0;
@@ -1218,7 +1209,7 @@ app.get('/api/export/excel', async (req, res) => {
           right: { style: 'thin', color: { argb: 'E2E8F0' } }
         };
 
-        if ([1, 5, 8, 9, 12, 13, 14].includes(colNumber)) {
+        if ([1, 5, 8, 9].includes(colNumber)) {
           cell.alignment = { horizontal: 'center', vertical: 'middle' };
         }
 
@@ -1279,7 +1270,7 @@ app.get('/api/export/excel', async (req, res) => {
     summaryCell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: '0F172A' } };
     summaryCell.alignment = { horizontal: 'left', vertical: 'middle' };
 
-    for (let c = 1; c <= 14; c++) {
+    for (let c = 1; c <= 10; c++) {
       const cell = footerRow.getCell(c);
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'E2E8F0' } };
       cell.border = {
