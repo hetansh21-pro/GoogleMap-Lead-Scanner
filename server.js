@@ -310,7 +310,7 @@ class MultiWorkerScraper {
   constructor(config) {
     const targetLimit = parseInt(config.targetLeads) || parseInt(config.maxResults) || 100;
     const reqWorkers = parseInt(config.workerCount) || 2;
-    const effectiveWorkers = Math.min(Math.max(reqWorkers, 1), 4); // Cap at 4 workers to prevent memory crash
+    const effectiveWorkers = Math.min(Math.max(reqWorkers, 1), 32); // Allow up to 32 parallel worker tabs
 
     const websiteFilter = config.websiteFilter || (config.onlyNoWebsite ? 'no_website' : 'all');
     this.config = {
@@ -961,7 +961,7 @@ app.post('/api/start-scan', async (req, res) => {
     status: 'running',
     startTime: new Date().toISOString(),
     endTime: null,
-    activeWorkers: Math.min(Math.max(parseInt(config.workerCount) || 3, 1), 8),
+    activeWorkers: Math.min(Math.max(parseInt(config.workerCount) || 3, 1), 32),
     workerDetails: []
   };
 

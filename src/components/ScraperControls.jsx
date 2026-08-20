@@ -194,14 +194,14 @@ export default function ScraperControls({
                   </span>
                   <span className="text-zinc-200 font-mono text-xs">{config.workerCount} Tabs</span>
                 </div>
-                <div className="flex gap-1">
-                  {[1, 2, 3, 4, 5, 6].map((num) => (
+                <div className="flex flex-wrap items-center gap-1">
+                  {[1, 2, 3, 4, 5, 6, 8, 12, 16].map((num) => (
                     <button
                       key={num}
                       type="button"
                       disabled={isRunning}
                       onClick={() => onChangeConfig('workerCount', num)}
-                      className={`flex-1 py-1 rounded-md text-xs font-mono font-semibold border transition ${
+                      className={`py-1 px-2 rounded-md text-xs font-mono font-semibold border transition ${
                         config.workerCount === num
                           ? 'bg-zinc-100 text-zinc-950 border-zinc-100 font-bold'
                           : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-100'
@@ -210,6 +210,18 @@ export default function ScraperControls({
                       {num}W
                     </button>
                   ))}
+                  <div className="w-16">
+                    <input
+                      type="number"
+                      min="1"
+                      max="32"
+                      disabled={isRunning}
+                      value={config.workerCount}
+                      onChange={(e) => onChangeConfig('workerCount', Math.min(Math.max(parseInt(e.target.value) || 1, 1), 32))}
+                      className="w-full bg-zinc-950 text-zinc-100 font-mono text-xs font-semibold rounded-md px-1.5 py-1 border border-zinc-800 focus:border-zinc-500 outline-none text-center"
+                      placeholder="Custom"
+                    />
+                  </div>
                 </div>
               </div>
 
