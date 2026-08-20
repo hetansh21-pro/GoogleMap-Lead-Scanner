@@ -9,6 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1051,42 +1052,250 @@ app.get('/api/export/csv', (req, res) => {
   res.status(200).send(csvContent);
 });
 
-// Excel (.xlsx) Export Endpoint
-app.get('/api/export/excel', (req, res) => {
-  const formattedData = currentLeads.map((l, idx) => ({
-    '#': idx + 1,
-    'Business Name': l.name || '',
-    'Phone Number': l.phone || 'Not Listed',
-    'Email Address': l.email || 'Not Listed',
-    'Has Website?': l.hasWebsite ? 'Yes' : 'No (Qualified)',
-    'Website URL': l.websiteUrl || 'No Website',
-    'Rating': l.rating || 'N/A',
-    'Reviews': l.reviews || '0',
-    'Address': l.address || '',
-    'Category': l.category || '',
-    'Opening Hours': l.openingHours || 'Not Listed',
-    'Price Range': l.priceRange || 'N/A',
-    'Plus Code': l.plusCode || 'N/A',
-    'Google Maps Link': l.placeUrl || '',
-    'Worker Thread': `Worker #${l.workerId || 1}`,
-    'Scraped At': l.scrapedAt || ''
-  }));
+// Excel (.xlsx) Export Endpoint with Rich Styling & Executive Theme
+app.get('/api/export/excel', async (req, res) => {
+  try {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'LeadMap Pro';
+    workbook.created = new Date();
 
-  const worksheet = XLSX.utils.json_to_sheet(formattedData);
-  worksheet['!cols'] = [
-    { wch: 6 }, { wch: 32 }, { wch: 22 }, { wch: 30 },
-    { wch: 22 }, { wch: 38 }, { wch: 10 }, { wch: 15 },
-    { wch: 45 }, { wch: 25 }, { wch: 25 }, { wch: 18 },
-    { wch: 20 }, { wch: 45 }, { wch: 15 }, { wch: 15 }
-  ];
+    const worksheet = workbook.addWorksheet('Qualified Leads', {
+      views: [{ showGridLines: true }]
+    });
 
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Captured Leads');
+    const leads = currentLeads || [];
+    const totalLeads = leads.length;
+    const noWebsiteCount = leads.filter(l => !l.hasWebsite).length;
+    const withPhoneCount = leads.filter(l => l.phone && l.phone !== 'Not Listed').length;
+    const withEmailCount = leads.filter(l => l.email && l.email !== 'Not Listed').length;
 
-  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', 'attachment; filename=google_maps_leads.xlsx');
-  res.send(buffer);
+    // --- 1. BANNER HEADER ---
+    worksheet.mergeCells('A1:N1');
+    const titleCell = worksheet.getCell('A1');
+    titleCell.value = 'LEADMAP PRO — QUALIFIED B2B LEADS REPORT';
+    titleCell.font = { name: 'Calibri', size: 16, bold: true, color: { argb: 'FFFFFF' } };
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0F172A' } };
+    titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    worksheet.getRow(1).height = 32;
+
+    worksheet.mergeCells('A2:N2');
+    const subtitleCell = worksheet.getCell('A2');
+    subtitleCell.value = `Generated on: ${new Date().toLocaleString()} | Verified Business Contacts & Prospecting Data`;
+    subtitleCell.font = { name: 'Calibri', size: 10, italic: true, color: { argb: '94A3B8' } };
+    subtitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E293B' } };
+    subtitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    worksheet.getRow(2).height = 20;
+
+    worksheet.getRow(3).height = 10;
+
+    // --- 2. SUMMARY METRICS CARDS ---
+    worksheet.mergeCells('A4:C4');
+    worksheet.mergeCells('D4:F4');
+    worksheet.mergeCells('G4:I4');
+    worksheet.mergeCells('J4:L4');
+
+    const cardConfig = [
+      { cell: 'A4', valCell: 'A5', label: 'TOTAL LEADS EXTRACTED', val: totalLeads, color: '1E293B' },
+      { cell: 'D4', valCell: 'D5', label: 'NO-WEBSITE PROSPECTS', val: `${noWebsiteCount} (${Math.round((noWebsiteCount/totalLeads)*100 || 0)}%)`, color: '166534' },
+      { cell: 'G4', valCell: 'G5', label: 'PHONE NUMBERS FOUND', val: `${withPhoneCount}`, color: '1E40AF' },
+      { cell: 'J4', valCell: 'J5', label: 'EMAILS EXTRACTED', val: `${withEmailCount}`, color: '6B21A8' }
+    ];
+
+    worksheet.getRow(4).height = 18;
+    worksheet.getRow(5).height = 24;
+
+    cardConfig.forEach(card => {
+      const lbl = worksheet.getCell(card.cell);
+      lbl.value = card.label;
+      lbl.font = { name: 'Calibri', size: 9, bold: true, color: { argb: '64748B' } };
+      lbl.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F8FAFC' } };
+      lbl.alignment = { horizontal: 'center', vertical: 'middle' };
+
+      const val = worksheet.getCell(card.valCell);
+      val.value = card.val;
+      val.font = { name: 'Calibri', size: 14, bold: true, color: { argb: card.color } };
+      val.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F8FAFC' } };
+      val.alignment = { horizontal: 'center', vertical: 'middle' };
+
+      [card.cell, card.valCell].forEach(c => {
+        worksheet.getCell(c).border = {
+          top: { style: 'thin', color: { argb: 'CBD5E1' } },
+          bottom: { style: 'thin', color: { argb: 'CBD5E1' } },
+          left: { style: 'thin', color: { argb: 'CBD5E1' } },
+          right: { style: 'thin', color: { argb: 'CBD5E1' } }
+        };
+      });
+    });
+
+    worksheet.getRow(6).height = 12;
+
+    // --- 3. DATA COLUMNS ---
+    const headers = [
+      '#',
+      'Business Name',
+      'Phone Number',
+      'Email Address',
+      'Has Website?',
+      'Website URL',
+      'Category',
+      'Rating',
+      'Reviews',
+      'Full Address',
+      'Opening Hours',
+      'Price Range',
+      'Worker Thread',
+      'Scraped At'
+    ];
+
+    const colWidths = [
+      { wch: 6 },   { wch: 32 },  { wch: 22 },  { wch: 30 },
+      { wch: 24 },  { wch: 38 },  { wch: 26 },  { wch: 10 },
+      { wch: 14 },  { wch: 45 },  { wch: 22 },  { wch: 15 },
+      { wch: 16 },  { wch: 18 }
+    ];
+
+    colWidths.forEach((col, idx) => {
+      worksheet.getColumn(idx + 1).width = col.wch;
+    });
+
+    const headerRow = worksheet.getRow(7);
+    headerRow.values = headers;
+    headerRow.height = 30;
+
+    headerRow.eachCell((cell) => {
+      cell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E293B' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.border = {
+        top: { style: 'medium', color: { argb: '0F172A' } },
+        bottom: { style: 'medium', color: { argb: '0F172A' } },
+        left: { style: 'thin', color: { argb: '334155' } },
+        right: { style: 'thin', color: { argb: '334155' } }
+      };
+    });
+
+    // --- 4. DATA ROWS ---
+    leads.forEach((lead, idx) => {
+      const rowNum = 8 + idx;
+      const row = worksheet.getRow(rowNum);
+      row.height = 24;
+
+      const hasWeb = !!lead.hasWebsite;
+      const webText = hasWeb ? 'Yes' : 'No (Qualified Prospect)';
+      const phoneVal = lead.phone || 'Not Listed';
+      const emailVal = lead.email || 'Not Listed';
+      const webUrlVal = lead.websiteUrl || 'No Website';
+      const ratingVal = lead.rating ? `${lead.rating} ★` : 'N/A';
+
+      row.values = [
+        idx + 1,
+        lead.name || 'N/A',
+        phoneVal,
+        emailVal,
+        webText,
+        webUrlVal,
+        lead.category || 'N/A',
+        ratingVal,
+        lead.reviews || '0',
+        lead.address || 'N/A',
+        lead.openingHours || 'Not Listed',
+        lead.priceRange || 'N/A',
+        `Worker #${lead.workerId || 1}`,
+        lead.scrapedAt || new Date().toLocaleTimeString()
+      ];
+
+      const isEven = idx % 2 === 0;
+      const rowBgColor = isEven ? 'FFFFFF' : 'F8FAFC';
+
+      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        cell.font = { name: 'Calibri', size: 10, color: { argb: '1E293B' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowBgColor } };
+        cell.alignment = { vertical: 'middle', wrapText: false };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'E2E8F0' } },
+          bottom: { style: 'thin', color: { argb: 'E2E8F0' } },
+          left: { style: 'thin', color: { argb: 'E2E8F0' } },
+          right: { style: 'thin', color: { argb: 'E2E8F0' } }
+        };
+
+        if ([1, 5, 8, 9, 12, 13, 14].includes(colNumber)) {
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        }
+
+        if (colNumber === 1) {
+          cell.font = { name: 'Calibri', size: 9, color: { argb: '64748B' }, bold: true };
+        }
+        if (colNumber === 2) {
+          cell.font = { name: 'Calibri', size: 10.5, bold: true, color: { argb: '0F172A' } };
+        }
+        if (colNumber === 3) {
+          if (phoneVal !== 'Not Listed') {
+            cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: '0F172A' } };
+          } else {
+            cell.font = { name: 'Calibri', size: 9.5, italic: true, color: { argb: '94A3B8' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isEven ? 'FEFCE8' : 'FEF9C3' } };
+          }
+        }
+        if (colNumber === 4) {
+          if (emailVal !== 'Not Listed') {
+            cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: '1D4ED8' } };
+          } else {
+            cell.font = { name: 'Calibri', size: 9.5, italic: true, color: { argb: '94A3B8' } };
+          }
+        }
+        if (colNumber === 5) {
+          if (!hasWeb) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'DCFCE7' } };
+            cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: '15803D' } };
+          } else {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F1F5F9' } };
+            cell.font = { name: 'Calibri', size: 9.5, color: { argb: '475569' } };
+          }
+        }
+        if (colNumber === 6) {
+          if (hasWeb && webUrlVal !== 'No Website') {
+            cell.font = { name: 'Calibri', size: 9.5, color: { argb: '2563EB' }, underline: true };
+          } else {
+            cell.font = { name: 'Calibri', size: 9.5, italic: true, color: { argb: '94A3B8' } };
+          }
+        }
+        if (colNumber === 8) {
+          if (lead.rating && parseFloat(lead.rating) >= 4.0) {
+            cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'A16207' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FEF9C3' } };
+          }
+        }
+      });
+    });
+
+    // --- 5. SUMMARY FOOTER ---
+    const lastDataRow = 7 + leads.length;
+    const footerRow = worksheet.getRow(lastDataRow + 1);
+    footerRow.height = 28;
+
+    worksheet.mergeCells(`A${lastDataRow + 1}:D${lastDataRow + 1}`);
+    const summaryCell = worksheet.getCell(`A${lastDataRow + 1}`);
+    summaryCell.value = `TOTAL RECORDS: ${leads.length} LEADS | QUALIFIED PROSPECTS: ${noWebsiteCount}`;
+    summaryCell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: '0F172A' } };
+    summaryCell.alignment = { horizontal: 'left', vertical: 'middle' };
+
+    for (let c = 1; c <= 14; c++) {
+      const cell = footerRow.getCell(c);
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'E2E8F0' } };
+      cell.border = {
+        top: { style: 'double', color: { argb: '0F172A' } },
+        bottom: { style: 'medium', color: { argb: '0F172A' } }
+      };
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=google_maps_leads.xlsx');
+    res.status(200).send(Buffer.from(buffer));
+  } catch (err) {
+    console.error('Error generating styled Excel file:', err);
+    res.status(500).json({ error: 'Failed to generate Excel file' });
+  }
 });
 
 // Socket.io connections
