@@ -90,6 +90,83 @@ export default function ScraperControls({
         </div>
       </div>
 
+      {/* Website Target Selection Mode - PROMINENT TOP CONTROL */}
+      <div className="space-y-2 pt-2 border-t border-zinc-800">
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-semibold text-zinc-300 tracking-tight flex items-center gap-1.5">
+            <Globe className="w-4 h-4 text-zinc-100" />
+            Website Target Filter
+          </label>
+          <span className="text-[11px] font-mono text-zinc-400">
+            {(config.websiteFilter === 'no_website' || config.onlyNoWebsite)
+              ? '🚫 Strict No Website Only'
+              : config.websiteFilter === 'has_website'
+              ? '🔗 Has Website Only'
+              : '🌐 All Businesses'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            disabled={isRunning}
+            onClick={() => {
+              onChangeConfig('websiteFilter', 'all');
+              onChangeConfig('onlyNoWebsite', false);
+            }}
+            className={`py-2 px-2.5 rounded-lg text-xs font-semibold border transition flex items-center justify-center gap-1.5 ${
+              (config.websiteFilter === 'all' || (!config.websiteFilter && !config.onlyNoWebsite))
+                ? 'bg-zinc-100 text-zinc-950 border-zinc-100 font-bold shadow-sm'
+                : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <Globe className="w-3.5 h-3.5" />
+            All Businesses
+          </button>
+
+          <button
+            type="button"
+            disabled={isRunning}
+            onClick={() => {
+              onChangeConfig('websiteFilter', 'no_website');
+              onChangeConfig('onlyNoWebsite', true);
+            }}
+            className={`py-2 px-2.5 rounded-lg text-xs font-semibold border transition flex items-center justify-center gap-1.5 ${
+              (config.websiteFilter === 'no_website' || config.onlyNoWebsite)
+                ? 'bg-amber-400 text-zinc-950 border-amber-400 font-bold shadow-sm'
+                : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <span>🚫</span>
+            No Website Only
+          </button>
+
+          <button
+            type="button"
+            disabled={isRunning}
+            onClick={() => {
+              onChangeConfig('websiteFilter', 'has_website');
+              onChangeConfig('onlyNoWebsite', false);
+            }}
+            className={`py-2 px-2.5 rounded-lg text-xs font-semibold border transition flex items-center justify-center gap-1.5 ${
+              config.websiteFilter === 'has_website'
+                ? 'bg-blue-500 text-white border-blue-500 font-bold shadow-sm'
+                : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <span>🔗</span>
+            Has Website Only
+          </button>
+        </div>
+
+        {(config.websiteFilter === 'no_website' || config.onlyNoWebsite) && (
+          <p className="text-[11px] text-amber-300 font-mono bg-amber-950/40 p-2 rounded-lg border border-amber-900/60 flex items-center gap-1.5">
+            <span>🚫</span>
+            <span><strong>Strict Mode:</strong> ONLY businesses WITHOUT a website will be fetched. Businesses with existing websites are strictly excluded (no combining).</span>
+          </p>
+        )}
+      </div>
+
       {/* Advanced Options Accordion Toggle */}
       <div className="border-t border-zinc-800 pt-3">
         <button

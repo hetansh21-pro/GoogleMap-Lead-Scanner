@@ -308,16 +308,18 @@ function getChromeExecutablePath() {
 class MultiWorkerScraper {
   constructor(config) {
     const targetLimit = parseInt(config.targetLeads) || parseInt(config.maxResults) || 100;
-    const reqWorkers = parseInt(config.workerCount) || 3;
-    const effectiveWorkers = Math.min(Math.max(reqWorkers, 1), 8);
+    const reqWorkers = parseInt(config.workerCount) || 2;
+    const effectiveWorkers = Math.min(Math.max(reqWorkers, 1), 4); // Cap at 4 workers to prevent memory crash
 
+    const websiteFilter = config.websiteFilter || (config.onlyNoWebsite ? 'no_website' : 'all');
     this.config = {
       category: config.category || 'Plumber',
       location: config.location || 'Ahmedabad',
       lat: config.lat || null,
       lng: config.lng || null,
       workerCount: effectiveWorkers,
-      onlyNoWebsite: config.onlyNoWebsite ?? false,
+      websiteFilter: websiteFilter,
+      onlyNoWebsite: websiteFilter === 'no_website',
       deepExtraction: config.deepExtraction ?? true,
       liveChrome: config.liveChrome ?? true,
       n8nWebhookUrl: config.n8nWebhookUrl || '',
@@ -335,8 +337,16 @@ class MultiWorkerScraper {
     this.isStopping = true;
     if (this.browser) {
       try {
+        const pages = await this.browser.pages().catch(() => []);
+        for (const p of pages) {
+          try { await p.close(); } catch (e) {}
+        }
         await this.browser.close();
       } catch (e) { }
+      try {
+        const proc = this.browser.process();
+        if (proc) proc.kill('SIGKILL');
+      } catch (e) {}
       this.browser = null;
     }
   }
@@ -382,10 +392,22 @@ class MultiWorkerScraper {
         '--disable-dev-shm-usage',
         '--disable-accelerated-2d-canvas',
         '--disable-gpu',
-        '--window-size=1400,900',
+        '--window-size=1280,800',
         '--lang=en-US',
         '--no-first-run',
-        '--no-zygote'
+        '--no-zygote',
+        '--js-flags=--max-old-space-size=512',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-breakpad',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-extensions',
+        '--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints',
+        '--disable-ipc-flooding-protection',
+        '--disable-renderer-backgrounding',
+        '--mute-audio',
+        '--no-default-browser-check'
       ],
       defaultViewport: { width: 1280, height: 800 }
     };
@@ -434,6 +456,23 @@ class MultiWorkerScraper {
       } else {
         workerPage = await this.browser.newPage();
       }
+
+      // Safe page crash listeners
+      workerPage.on('error', err => console.error(`Worker ${workerId} page error:`, err.message));
+      workerPage.on('pageerror', err => console.error(`Worker ${workerId} page script error:`, err.message));
+
+      // Optimize memory by blocking heavy media and images
+      try {
+        await workerPage.setRequestInterception(true);
+        workerPage.on('request', (req) => {
+          const resourceType = req.resourceType();
+          if (['image', 'media', 'font'].includes(resourceType)) {
+            req.abort();
+          } else {
+            req.continue();
+          }
+        });
+      } catch (e) {}
 
       await workerPage.setUserAgent(
         'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -525,6 +564,21 @@ class MultiWorkerScraper {
           const reviewMatch = cardText.match(/\(([\d,]+)\)/);
           const phoneCardMatch = cardText.match(/(?:\+?91|0)?[-.\s]?[6-9]\d{4}[-.\s]?\d{5}|0\d{2,4}[-.\s]?\d{6,8}/);
 
+          let cardWebsite = null;
+          const cardWebEl = card.querySelector('a[data-value="Website"], a[aria-label*="website" i], a[aria-label*="Website"], a[aria-label*="site" i], a[data-tooltip*="website" i], a.lI9fbf');
+          if (cardWebEl && cardWebEl.href && !cardWebEl.href.includes('google.com') && !cardWebEl.href.includes('google.co') && !cardWebEl.href.includes('googleusercontent.com')) {
+            cardWebsite = cardWebEl.href;
+          } else {
+            const extLinks = Array.from(card.querySelectorAll('a[href^="http"]'));
+            for (const el of extLinks) {
+              const href = el.href || '';
+              if (href && !href.includes('google.com') && !href.includes('google.co') && !href.includes('googleusercontent.com') && !href.includes('ggpht.com') && !href.includes('schema.org') && !href.includes('gstatic.com')) {
+                cardWebsite = href;
+                break;
+              }
+            }
+          }
+
           const rating = ratingMatch ? ratingMatch[1] : null;
           const reviews = reviewMatch ? reviewMatch[1].replace(/,/g, '') : null;
           const cardPhone = phoneCardMatch ? phoneCardMatch[0] : null;
@@ -537,7 +591,8 @@ class MultiWorkerScraper {
               cardSnippet: cardText,
               cardRating: rating,
               cardReviews: reviews,
-              cardPhone: cardPhone
+              cardPhone: cardPhone,
+              cardWebsite: cardWebsite
             });
           }
         });
@@ -575,7 +630,7 @@ class MultiWorkerScraper {
           await new Promise(r => setTimeout(r, 1200));
 
           // Extract complete details from the dedicated Google Maps place page
-          detail = await workerPage.evaluate((bName, cRating, cReviews, cPhone) => {
+          detail = await workerPage.evaluate((bName, cRating, cReviews, cPhone, cWebsite) => {
             const body = document.body;
             const mainPane = body.querySelector('div[role="main"]') || body.querySelector('div.m6QErb') || body;
             const fullText = body.innerText || '';
@@ -649,12 +704,30 @@ class MultiWorkerScraper {
               rawPhoneCandidate = cPhone;
             }
 
-            // 4. Website Row (Globe Icon)
-            let websiteUrl = null;
-            const websiteEl = body.querySelector('a[data-item-id="authority"], a[aria-label*="website"], a[aria-label*="Website"], a[data-tooltip*="website"]');
-            if (websiteEl && websiteEl.href && !websiteEl.href.includes('google.com') && !websiteEl.href.includes('googleusercontent.com')) {
-              websiteUrl = websiteEl.href;
+            // 4. Website Row (Comprehensive extraction across all DOM structures)
+            let websiteUrl = cWebsite || null;
+
+            if (!websiteUrl) {
+              const websiteEl = body.querySelector('a[data-item-id="authority"], [data-item-id="authority"] a, a[aria-label*="website" i], a[aria-label*="Website"], a[aria-label*="site" i], a[data-tooltip*="website" i], button[data-item-id="authority"]');
+              if (websiteEl) {
+                const href = websiteEl.getAttribute('href') || websiteEl.href || '';
+                if (href && !href.includes('google.com') && !href.includes('google.co') && !href.includes('googleusercontent.com')) {
+                  websiteUrl = href;
+                }
+              }
             }
+
+            if (!websiteUrl) {
+              const links = Array.from(mainPane.querySelectorAll('a[href^="http"]'));
+              for (const l of links) {
+                const href = l.getAttribute('href') || l.href || '';
+                if (href && !href.includes('google.com') && !href.includes('google.co') && !href.includes('googleusercontent.com') && !href.includes('ggpht.com') && !href.includes('schema.org') && !href.includes('gstatic.com') && !href.includes('w3.org')) {
+                  websiteUrl = href;
+                  break;
+                }
+              }
+            }
+
             const hasWebsiteLink = !!websiteUrl;
 
             // 5. Opening Hours Row (Clock Icon)
@@ -720,7 +793,7 @@ class MultiWorkerScraper {
               priceRange: priceRange || 'N/A',
               rawText: fullText.substring(0, 4000)
             };
-          }, item.name, item.cardRating, item.cardReviews);
+          }, item.name, item.cardRating, item.cardReviews, item.cardPhone, item.cardWebsite);
 
           // Return to search results feed page
           await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
@@ -728,8 +801,8 @@ class MultiWorkerScraper {
         } catch (err) {
           detail = {
             name: item.name,
-            hasWebsite: false,
-            websiteUrl: null,
+            hasWebsite: !!item.cardWebsite,
+            websiteUrl: item.cardWebsite || null,
             rawPhoneCandidate: null,
             rating: item.cardRating || 'N/A',
             reviews: item.cardReviews || '0',
@@ -743,11 +816,24 @@ class MultiWorkerScraper {
           await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
         }
 
-        if (this.config.onlyNoWebsite && detail.hasWebsite) {
+        const isNoWebsiteOnly = this.config.websiteFilter === 'no_website' || this.config.onlyNoWebsite;
+        const isHasWebsiteOnly = this.config.websiteFilter === 'has_website';
+
+        if (isNoWebsiteOnly && detail.hasWebsite) {
           scanStats.skippedCount++;
           io.emit('lead_skipped', {
             name: detail.name,
-            reason: 'Has Website (' + (detail.websiteUrl || 'Domain present') + ')'
+            reason: 'Has Website (' + (detail.websiteUrl || 'Domain present') + ' - Excluded)'
+          });
+          this.updateWorkerProgress(workerId, scanStats.scannedCount);
+          continue;
+        }
+
+        if (isHasWebsiteOnly && !detail.hasWebsite) {
+          scanStats.skippedCount++;
+          io.emit('lead_skipped', {
+            name: detail.name,
+            reason: 'No Website (Skipped - Has Website filter active)'
           });
           this.updateWorkerProgress(workerId, scanStats.scannedCount);
           continue;
@@ -1037,3 +1123,18 @@ server.on('error', (err) => {
 server.listen(DEFAULT_PORT, () => {
   console.log(`🚀 Google Maps Lead Generator Server running on http://localhost:${DEFAULT_PORT}`);
 });
+
+async function cleanupProcesses() {
+  if (activeJob) {
+    await activeJob.stop().catch(() => {});
+  }
+}
+process.on('SIGINT', async () => {
+  await cleanupProcesses();
+  process.exit(0);
+});
+process.on('SIGTERM', async () => {
+  await cleanupProcesses();
+  process.exit(0);
+});
+

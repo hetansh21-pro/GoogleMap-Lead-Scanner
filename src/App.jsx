@@ -19,6 +19,7 @@ export default function App() {
 
   const [config, setConfig] = useState({
     workerCount: 3,
+    websiteFilter: 'all', // 'all' | 'no_website' | 'has_website'
     onlyNoWebsite: false,
     deepExtraction: true,
     liveChrome: true,
