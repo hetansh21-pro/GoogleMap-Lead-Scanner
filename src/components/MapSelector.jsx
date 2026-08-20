@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { MapPin, Search } from 'lucide-react';
+import { MapPin, Search, Layers } from 'lucide-react';
+import { getSubLocationsForCity } from '../utils/subLocationsData';
 
 const PRESET_CITIES = [
   { name: 'Ahmedabad, India', lat: 23.0225, lng: 72.5714 },
@@ -12,7 +13,16 @@ const PRESET_CITIES = [
   { name: 'Toronto, Canada', lat: 43.6532, lng: -79.3832 }
 ];
 
-export default function MapSelector({ selectedLocation, onSelectLocation, selectedCoords, onSelectCoords }) {
+export default function MapSelector({
+  selectedLocation,
+  onSelectLocation,
+  selectedCoords,
+  onSelectCoords,
+  selectedSubLocations = [],
+  onSelectSubLocations = () => {},
+  isBulkMode = true,
+  onToggleBulkMode = () => {}
+}) {
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const markerRef = useRef(null);
@@ -36,7 +46,6 @@ export default function MapSelector({ selectedLocation, onSelectLocation, select
       attribution: '&copy; OpenStreetMap &copy; CARTO'
     }).addTo(map);
 
-    // Minimal high-contrast monochrome pin marker
     const markerIcon = L.divIcon({
       className: 'custom-map-pin',
       html: `<div style="width: 18px; height: 18px; background: #ffffff; border-radius: 50%; border: 3.5px solid #09090b; box-shadow: 0 2px 8px rgba(0,0,0,0.6);"></div>`,
@@ -59,6 +68,7 @@ export default function MapSelector({ selectedLocation, onSelectLocation, select
         const address = data.display_name ? data.display_name.split(',').slice(0, 3).join(', ') : `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
         setSearchQuery(address);
         onSelectLocation(address);
+        updateSubLocationsForNewLocation(address);
       } catch (err) {
         const fallbackStr = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
         setSearchQuery(fallbackStr);
@@ -78,10 +88,16 @@ export default function MapSelector({ selectedLocation, onSelectLocation, select
     };
   }, []);
 
+  const updateSubLocationsForNewLocation = (locName) => {
+    const defaultSubAreas = getSubLocationsForCity(locName);
+    onSelectSubLocations(defaultSubAreas);
+  };
+
   const handleCityPreset = (city) => {
     setSearchQuery(city.name);
     onSelectLocation(city.name);
     onSelectCoords({ lat: city.lat, lng: city.lng });
+    updateSubLocationsForNewLocation(city.name);
 
     if (mapInstanceRef.current && markerRef.current) {
       mapInstanceRef.current.flyTo([city.lat, city.lng], 13);
@@ -101,8 +117,10 @@ export default function MapSelector({ selectedLocation, onSelectLocation, select
         const first = data[0];
         const lat = parseFloat(first.lat);
         const lng = parseFloat(first.lon);
-        onSelectLocation(first.display_name.split(',').slice(0, 3).join(', '));
+        const locName = first.display_name.split(',').slice(0, 3).join(', ');
+        onSelectLocation(locName);
         onSelectCoords({ lat, lng });
+        updateSubLocationsForNewLocation(locName);
 
         if (mapInstanceRef.current && markerRef.current) {
           mapInstanceRef.current.flyTo([lat, lng], 13);
@@ -110,9 +128,11 @@ export default function MapSelector({ selectedLocation, onSelectLocation, select
         }
       } else {
         onSelectLocation(searchQuery);
+        updateSubLocationsForNewLocation(searchQuery);
       }
     } catch (err) {
       onSelectLocation(searchQuery);
+      updateSubLocationsForNewLocation(searchQuery);
     } finally {
       setIsSearching(false);
     }
@@ -120,29 +140,40 @@ export default function MapSelector({ selectedLocation, onSelectLocation, select
 
   return (
     <div className="space-y-3 flex flex-col h-full">
+      {/* Header & Mode Status */}
       <div className="flex items-center justify-between">
         <label className="text-xs font-semibold text-zinc-300 tracking-tight flex items-center gap-1.5">
           <MapPin className="w-4 h-4 text-zinc-100" />
-          Location & Coordinates
+          City Location & Map Pin
         </label>
-        <span className="text-[11px] text-zinc-500 font-mono">
-          {selectedCoords?.lat ? `${selectedCoords.lat}, ${selectedCoords.lng}` : 'Click map to pin'}
-        </span>
+
+        <button
+          type="button"
+          onClick={() => onToggleBulkMode(!isBulkMode)}
+          className={`px-2.5 py-1 rounded-md text-[11px] font-bold border transition flex items-center gap-1.5 cursor-pointer ${
+            isBulkMode
+              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+              : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5" />
+          {isBulkMode ? '⚡ Sub-Areas Bulk Mode ON' : 'Single Location Mode'}
+        </button>
       </div>
 
-      {/* Input */}
+      {/* Main Location Search Input */}
       <form onSubmit={handleSearchSubmit} className="relative flex items-center">
         <input
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search location or city name..."
+          placeholder="Enter city (e.g. Ahmedabad, Mumbai, New York)..."
           className="w-full bg-zinc-950 text-zinc-100 placeholder-zinc-500 text-xs rounded-lg pl-3 pr-16 py-2 border border-zinc-800 focus:border-zinc-500 focus:ring-0 outline-none font-medium transition"
         />
         <button
           type="submit"
           disabled={isSearching}
-          className="absolute right-1 px-3 py-1 bg-zinc-100 hover:bg-white text-zinc-950 font-bold text-xs rounded transition"
+          className="absolute right-1 px-3 py-1 bg-zinc-100 hover:bg-white text-zinc-950 font-bold text-xs rounded transition cursor-pointer"
         >
           {isSearching ? '...' : 'Search'}
         </button>
@@ -155,7 +186,7 @@ export default function MapSelector({ selectedLocation, onSelectLocation, select
             key={city.name}
             type="button"
             onClick={() => handleCityPreset(city)}
-            className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-all ${
+            className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-all cursor-pointer ${
               selectedLocation === city.name
                 ? 'bg-zinc-100 text-zinc-950 border-zinc-100 font-bold'
                 : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-100 hover:border-zinc-700'
@@ -166,11 +197,10 @@ export default function MapSelector({ selectedLocation, onSelectLocation, select
         ))}
       </div>
 
-      {/* Large Square Map Display */}
-      <div className="flex-1 w-full min-h-[300px] aspect-square rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 relative shadow-inner">
+      {/* Map Display */}
+      <div className="flex-1 w-full min-h-[220px] rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 relative shadow-inner">
         <div ref={mapContainerRef} className="w-full h-full" />
       </div>
     </div>
   );
 }
-

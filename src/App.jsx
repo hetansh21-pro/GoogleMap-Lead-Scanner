@@ -4,16 +4,28 @@ import { MapPin, FileSpreadsheet, CheckCircle2 } from 'lucide-react';
 import MapSelector from './components/MapSelector';
 import CategorySelector from './components/CategorySelector';
 import ScraperControls from './components/ScraperControls';
+import SubAreasSelector from './components/SubAreasSelector';
 import LiveStats from './components/LiveStats';
 import WorkerMonitor from './components/WorkerMonitor';
 import LeadsTable from './components/LeadsTable';
 import { downloadExcel } from './utils/excelExporter';
+import { getSubLocationsForCity, DEFAULT_AHMEDABAD_AREAS, getSavedManualBulkAreas } from './utils/subLocationsData';
 
 const socket = io('/', { autoConnect: true });
 
 export default function App() {
   const [selectedLocation, setSelectedLocation] = useState('Ahmedabad, India');
   const [selectedCoords, setSelectedCoords] = useState({ lat: 23.0225, lng: 72.5714 });
+
+  const [manualBulkAreas, setManualBulkAreas] = useState(() => {
+    return getSavedManualBulkAreas() || DEFAULT_AHMEDABAD_AREAS;
+  });
+
+  const [selectedSubLocations, setSelectedSubLocations] = useState(() => {
+    return getSavedManualBulkAreas() || getSubLocationsForCity('Ahmedabad, India');
+  });
+
+  const [isBulkMode, setIsBulkMode] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState('Plumber & Plumbing Services');
   const [customCategory, setCustomCategory] = useState('');
 
@@ -101,10 +113,19 @@ export default function App() {
     setConfig((prev) => ({ ...prev, [key]: value }));
   };
 
+  const handleUpdateManualBulkAreas = (newAreasList) => {
+    setManualBulkAreas(newAreasList);
+    setSelectedSubLocations(newAreasList);
+    showNotification(`Updated settings with ${newAreasList.length} bulk sub-areas!`, 'success');
+  };
+
   const handleStartScan = async () => {
+    const activeSubAreas = isBulkMode ? selectedSubLocations : [];
     const payload = {
       category: customCategory || selectedCategory,
       location: selectedLocation,
+      subLocations: activeSubAreas,
+      isBulkMode: isBulkMode,
       lat: selectedCoords.lat,
       lng: selectedCoords.lng,
       ...config
@@ -120,7 +141,10 @@ export default function App() {
 
       if (res.ok) {
         setLeads([]);
-        showNotification(`Searching "${payload.category}" in ${payload.location}...`, 'success');
+        const bulkMsg = isBulkMode && activeSubAreas.length > 0
+          ? ` across ${activeSubAreas.length} active sub-areas in `
+          : ' in ';
+        showNotification(`Searching "${payload.category}"${bulkMsg}${payload.location}...`, 'success');
       } else {
         showNotification(`${data.error || 'Failed to start scan'}`, 'error');
       }
@@ -212,10 +236,10 @@ export default function App() {
               <h1 className="font-bold text-zinc-100 text-sm tracking-tight flex items-center gap-2">
                 LeadMap Pro
                 <span className="text-[10px] font-mono bg-zinc-900 text-zinc-400 px-2 py-0.5 rounded border border-zinc-800 font-normal">
-                  v3.0 Minimal
+                  v3.0 Bulk Scraper
                 </span>
               </h1>
-              <p className="text-[11px] text-zinc-400">Google Maps Lead Finder & Auto Exporter</p>
+              <p className="text-[11px] text-zinc-400">Google Maps Lead Finder & Multi-Area Bulk Scanner</p>
             </div>
           </div>
 
@@ -241,7 +265,7 @@ export default function App() {
 
       {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 pt-6 space-y-5">
-        {/* UNIFIED TOP SECTION: Left Big Square Map & Right Controls Panel */}
+        {/* UNIFIED TOP SECTION: Left Map & Right Controls Panel */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
           {/* Left Column: Big Square Map Component */}
           <div className="lg:col-span-5 minimal-card p-4 flex flex-col justify-between shadow-sm">
@@ -250,6 +274,10 @@ export default function App() {
               onSelectLocation={setSelectedLocation}
               selectedCoords={selectedCoords}
               onSelectCoords={setSelectedCoords}
+              selectedSubLocations={selectedSubLocations}
+              onSelectSubLocations={setSelectedSubLocations}
+              isBulkMode={isBulkMode}
+              onToggleBulkMode={setIsBulkMode}
             />
           </div>
 
@@ -269,10 +297,23 @@ export default function App() {
                 onStart={handleStartScan}
                 onPause={handlePauseScan}
                 onStop={handleStopScan}
+                manualBulkAreas={manualBulkAreas}
+                onUpdateManualBulkAreas={handleUpdateManualBulkAreas}
+                autoBulkScanEnabled={isBulkMode}
+                onToggleAutoBulkScan={setIsBulkMode}
               />
             </div>
           </div>
         </div>
+
+        {/* DEDICATED SEPARATE SECTION CARD FOR SMALL & BIG SUB-AREAS */}
+        <SubAreasSelector
+          selectedLocation={selectedLocation}
+          selectedSubLocations={selectedSubLocations}
+          onSelectSubLocations={setSelectedSubLocations}
+          isBulkMode={isBulkMode}
+          onToggleBulkMode={setIsBulkMode}
+        />
 
         {/* LIVE STATS BAR */}
         <LiveStats stats={stats} />
@@ -292,4 +333,3 @@ export default function App() {
     </div>
   );
 }
-

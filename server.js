@@ -43,7 +43,7 @@ let scanStats = {
 // Helper: Format & Clean Phone Number with High Precision
 function formatPhoneNumber(phoneStr) {
   if (!phoneStr || typeof phoneStr !== 'string') return null;
-  
+
   let cleaned = phoneStr
     .replace(/^phone:tel:/i, '')
     .replace(/^tel:/i, '')
@@ -231,7 +231,7 @@ async function scrapeWebsiteContact(websiteUrl) {
             if (!emails[0]) emails = extractEmails(contactText);
             if (!textPhone) textPhone = extractValidPhone(contactText);
           }
-        } catch (e) {}
+        } catch (e) { }
       }
     }
 
@@ -251,7 +251,7 @@ async function deepSearchContact(businessName, locationStr) {
     const cleanLoc = (locationStr || '').replace(/["']/g, '').trim();
     const query = encodeURIComponent(`${cleanName} ${cleanLoc} phone OR contact OR mobile`);
     const searchUrl = `https://html.duckduckgo.com/html/?q=${query}`;
-    
+
     const response = await axios.get(searchUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -316,6 +316,8 @@ class MultiWorkerScraper {
     this.config = {
       category: config.category || 'Plumber',
       location: config.location || 'Ahmedabad',
+      subLocations: Array.isArray(config.subLocations) ? config.subLocations : [],
+      isBulkMode: config.isBulkMode ?? true,
       lat: config.lat || null,
       lng: config.lng || null,
       workerCount: effectiveWorkers,
@@ -340,38 +342,54 @@ class MultiWorkerScraper {
       try {
         const pages = await this.browser.pages().catch(() => []);
         for (const p of pages) {
-          try { await p.close(); } catch (e) {}
+          try { await p.close(); } catch (e) { }
         }
         await this.browser.close();
       } catch (e) { }
       try {
         const proc = this.browser.process();
         if (proc) proc.kill('SIGKILL');
-      } catch (e) {}
+      } catch (e) { }
       this.browser = null;
     }
   }
 
-  buildSubQueries(category, location) {
+  buildSubQueries(category, location, subLocations = []) {
     const cleanCat = category.trim();
     const cleanLoc = location.trim();
-    const zones = [
-      '', 'Central', 'Downtown', 'North', 'South', 'East', 'West',
-      'Main Market', 'City Center', 'Commercial Area', 'Suburbs',
-      'Business District', 'Plaza', 'Outer', 'Market', 'Station Road',
-      'Highway', 'Industrial Area', 'Zone 1', 'Zone 2', 'Zone 3',
-      'Ring Road', 'Old City', 'New City', 'Extension', 'Complex'
-    ];
+    const queries = [];
 
-    const base = zones.map(z => z ? `${cleanCat} in ${cleanLoc} ${z}` : `${cleanCat} in ${cleanLoc}`);
-    base.push(`${cleanCat} near ${cleanLoc}`, `${cleanCat} ${cleanLoc}`);
-    return Array.from(new Set(base));
+    if (Array.isArray(subLocations) && subLocations.length > 0) {
+      // User provided or configured bulk sub-areas!
+      subLocations.forEach(sub => {
+        const cleanSub = (sub || '').trim();
+        if (cleanSub) {
+          queries.push(`${cleanCat} in ${cleanSub}, ${cleanLoc}`);
+          queries.push(`${cleanCat} near ${cleanSub}, ${cleanLoc}`);
+        }
+      });
+    }
+
+    // Always include city-level base query and standard zone fallbacks
+    queries.push(`${cleanCat} in ${cleanLoc}`);
+    queries.push(`${cleanCat} near ${cleanLoc}`);
+
+    const zones = [
+      'Central', 'Downtown', 'North', 'South', 'East', 'West',
+      'Main Market', 'City Center', 'Commercial Area', 'Suburbs',
+      'Business District', 'Plaza', 'Industrial Area', 'Ring Road'
+    ];
+    zones.forEach(z => {
+      queries.push(`${cleanCat} in ${cleanLoc} ${z}`);
+    });
+
+    return Array.from(new Set(queries));
   }
 
   async run() {
-    const { category, location, workerCount, liveChrome } = this.config;
+    const { category, location, subLocations, workerCount, liveChrome } = this.config;
 
-    this.subQueryQueue = this.buildSubQueries(category, location);
+    this.subQueryQueue = this.buildSubQueries(category, location, subLocations);
 
     scanStats.activeWorkers = workerCount;
     scanStats.workerDetails = Array.from({ length: workerCount }, (_, i) => ({
@@ -473,7 +491,7 @@ class MultiWorkerScraper {
             req.continue();
           }
         });
-      } catch (e) {}
+      } catch (e) { }
 
       await workerPage.setUserAgent(
         'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -504,7 +522,7 @@ class MultiWorkerScraper {
       this.updateWorkerStatus(workerId, `Error: ${err.message}`);
     } finally {
       if (workerPage && workerIndex > 0) {
-        try { await workerPage.close(); } catch (e) {}
+        try { await workerPage.close(); } catch (e) { }
       }
     }
   }
@@ -621,13 +639,13 @@ class MultiWorkerScraper {
         let detail = null;
         try {
           // Navigate directly to dedicated place page (google.com/maps/place/BusinessName/...)
-          await workerPage.goto(item.url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+          await workerPage.goto(item.url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => { });
           await Promise.race([
             workerPage.waitForSelector('h1', { timeout: 4000 }),
             workerPage.waitForSelector('button[data-item-id="address"]', { timeout: 4000 }),
             workerPage.waitForSelector('button[data-item-id*="phone"]', { timeout: 4000 }),
             new Promise(r => setTimeout(r, 2000))
-          ]).catch(() => {});
+          ]).catch(() => { });
           await new Promise(r => setTimeout(r, 1200));
 
           // Extract complete details from the dedicated Google Maps place page
@@ -797,7 +815,7 @@ class MultiWorkerScraper {
           }, item.name, item.cardRating, item.cardReviews, item.cardPhone, item.cardWebsite);
 
           // Return to search results feed page
-          await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+          await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => { });
           await new Promise(r => setTimeout(r, 1200));
         } catch (err) {
           detail = {
@@ -814,7 +832,7 @@ class MultiWorkerScraper {
             priceRange: 'N/A',
             rawText: item.cardSnippet
           };
-          await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+          await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => { });
         }
 
         const isNoWebsiteOnly = this.config.websiteFilter === 'no_website' || this.config.onlyNoWebsite;
@@ -1096,7 +1114,7 @@ app.get('/api/export/excel', async (req, res) => {
 
     const cardConfig = [
       { cell: 'A4', valCell: 'A5', label: 'TOTAL LEADS EXTRACTED', val: totalLeads, color: '1E293B' },
-      { cell: 'D4', valCell: 'D5', label: 'NO-WEBSITE PROSPECTS', val: `${noWebsiteCount} (${Math.round((noWebsiteCount/totalLeads)*100 || 0)}%)`, color: '166534' },
+      { cell: 'D4', valCell: 'D5', label: 'NO-WEBSITE PROSPECTS', val: `${noWebsiteCount} (${Math.round((noWebsiteCount / totalLeads) * 100 || 0)}%)`, color: '166534' },
       { cell: 'G4', valCell: 'G5', label: 'PHONE NUMBERS FOUND', val: `${withPhoneCount}`, color: '1E40AF' },
       { cell: 'J4', valCell: 'J5', label: 'EMAILS EXTRACTED', val: `${withEmailCount}`, color: '6B21A8' }
     ];
@@ -1144,9 +1162,9 @@ app.get('/api/export/excel', async (req, res) => {
     ];
 
     const colWidths = [
-      { wch: 6 },   { wch: 32 },  { wch: 22 },  { wch: 30 },
-      { wch: 24 },  { wch: 38 },  { wch: 26 },  { wch: 10 },
-      { wch: 14 },  { wch: 45 }
+      { wch: 6 }, { wch: 32 }, { wch: 22 }, { wch: 30 },
+      { wch: 24 }, { wch: 38 }, { wch: 26 }, { wch: 10 },
+      { wch: 14 }, { wch: 45 }
     ];
 
     colWidths.forEach((col, idx) => {
@@ -1326,7 +1344,7 @@ server.listen(DEFAULT_PORT, () => {
 
 async function cleanupProcesses() {
   if (activeJob) {
-    await activeJob.stop().catch(() => {});
+    await activeJob.stop().catch(() => { });
   }
 }
 process.on('SIGINT', async () => {

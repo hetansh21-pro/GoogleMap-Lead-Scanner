@@ -162,7 +162,7 @@ export default function ScraperControls({
         {(config.websiteFilter === 'no_website' || config.onlyNoWebsite) && (
           <p className="text-[11px] text-amber-300 font-mono bg-amber-950/40 p-2 rounded-lg border border-amber-900/60 flex items-center gap-1.5">
             <span>🚫</span>
-            <span><strong>Strict Mode:</strong> ONLY businesses WITHOUT a website will be fetched. Businesses with existing websites are strictly excluded (no combining).</span>
+            <span><strong>Strict Mode:</strong> ONLY businesses WITHOUT a website will be fetched. Businesses with existing websites are strictly excluded.</span>
           </p>
         )}
       </div>
@@ -175,14 +175,14 @@ export default function ScraperControls({
           className="w-full flex items-center justify-between text-xs font-medium text-zinc-400 hover:text-zinc-200 transition py-1"
         >
           <span className="flex items-center gap-1.5">
-            <Settings className="w-4 h-4 text-zinc-400" />
-            Advanced Options (Tabs: {config.workerCount}, Filters, Webhook)
+            <Settings className="w-4 h-4 text-zinc-300" />
+            Main Settings & Configuration (Tabs: {config.workerCount}, Webhook)
           </span>
           {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
         </button>
 
         {showAdvanced && (
-          <div className="mt-3 p-3.5 bg-zinc-950 rounded-xl border border-zinc-800 space-y-3.5">
+          <div className="mt-3 p-3.5 bg-zinc-950 rounded-xl border border-zinc-800 space-y-4">
             {/* Workers & Live Chrome */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {/* Workers */}
@@ -339,4 +339,3 @@ export default function ScraperControls({
     </div>
   );
 }
-
