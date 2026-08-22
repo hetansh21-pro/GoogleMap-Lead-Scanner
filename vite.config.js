@@ -10,11 +10,17 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('error', () => {});
+        }
       },
       '/socket.io': {
         target: 'http://localhost:3001',
         ws: true,
-        changeOrigin: true
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('error', () => {});
+        }
       }
     }
   }

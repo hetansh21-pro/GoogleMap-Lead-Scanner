@@ -478,7 +478,8 @@ class MultiWorkerScraper {
 
       // Safe page crash listeners
       workerPage.on('error', err => console.error(`Worker ${workerId} page error:`, err.message));
-      workerPage.on('pageerror', err => console.error(`Worker ${workerId} page script error:`, err.message));
+      // Silence noisy Google Maps internal web page script errors
+      workerPage.on('pageerror', () => {});
 
       // Optimize memory by blocking heavy media and images
       try {
