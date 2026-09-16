@@ -29,6 +29,7 @@ app.use(express.json());
 // Global State
 let activeJob = null;
 let currentLeads = [];
+let lastScanMeta = { category: 'Plumber', location: 'Ahmedabad' };
 let scanStats = {
   scannedCount: 0,
   qualifiedCount: 0,
@@ -293,6 +294,9 @@ async function sendToN8nWebhook(webhookUrl, leadData) {
 
 // Helper: Detect Chrome/Chromium Binary
 function getChromeExecutablePath() {
+  if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) {
+    return process.env.CHROME_PATH;
+  }
   const paths = [
     '/usr/bin/google-chrome',
     '/usr/bin/google-chrome-stable',
@@ -357,31 +361,28 @@ class MultiWorkerScraper {
   buildSubQueries(category, location, subLocations = []) {
     const cleanCat = category.trim();
     const cleanLoc = location.trim();
+    const citySimpleName = cleanLoc.split(',')[0].trim();
     const queries = [];
 
     if (Array.isArray(subLocations) && subLocations.length > 0) {
-      // User provided or configured bulk sub-areas!
       subLocations.forEach(sub => {
-        const cleanSub = (sub || '').trim();
+        let cleanSub = (sub || '').trim();
+        cleanSub = cleanSub.replace(/\s*\([^)]*\)/g, '').trim();
         if (cleanSub) {
-          queries.push(`${cleanCat} in ${cleanSub}, ${cleanLoc}`);
-          queries.push(`${cleanCat} near ${cleanSub}, ${cleanLoc}`);
+          if (cleanSub.toLowerCase().includes(citySimpleName.toLowerCase())) {
+            queries.push(`${cleanCat} in ${cleanSub}`);
+            queries.push(`${cleanCat} near ${cleanSub}`);
+          } else {
+            queries.push(`${cleanCat} in ${cleanSub}, ${citySimpleName}`);
+            queries.push(`${cleanCat} near ${cleanSub}, ${citySimpleName}`);
+          }
         }
       });
     }
 
-    // Always include city-level base query and standard zone fallbacks
     queries.push(`${cleanCat} in ${cleanLoc}`);
-    queries.push(`${cleanCat} near ${cleanLoc}`);
-
-    const zones = [
-      'Central', 'Downtown', 'North', 'South', 'East', 'West',
-      'Main Market', 'City Center', 'Commercial Area', 'Suburbs',
-      'Business District', 'Plaza', 'Industrial Area', 'Ring Road'
-    ];
-    zones.forEach(z => {
-      queries.push(`${cleanCat} in ${cleanLoc} ${z}`);
-    });
+    queries.push(`${cleanCat} in ${citySimpleName}`);
+    queries.push(`${cleanCat} near ${citySimpleName}`);
 
     return Array.from(new Set(queries));
   }
@@ -459,7 +460,12 @@ class MultiWorkerScraper {
     scanStats.endTime = new Date().toISOString();
     scanStats.activeWorkers = 0;
     io.emit('stats_update', scanStats);
-    io.emit('scan_completed', { leads: currentLeads, stats: scanStats });
+    io.emit('scan_completed', {
+      leads: currentLeads,
+      stats: scanStats,
+      category: this.config.category,
+      location: this.config.location
+    });
   }
 
   async runWorker(workerIndex, existingPages) {
@@ -476,12 +482,9 @@ class MultiWorkerScraper {
         workerPage = await this.browser.newPage();
       }
 
-      // Safe page crash listeners
       workerPage.on('error', err => console.error(`Worker ${workerId} page error:`, err.message));
-      // Silence noisy Google Maps internal web page script errors
       workerPage.on('pageerror', () => {});
 
-      // Optimize memory by blocking heavy media and images
       try {
         await workerPage.setRequestInterception(true);
         workerPage.on('request', (req) => {
@@ -529,7 +532,11 @@ class MultiWorkerScraper {
   }
 
   async processQuery(workerId, workerPage, searchQuery) {
-    const mapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`;
+    const { lat, lng } = this.config;
+    let mapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`;
+    if (lat && lng) {
+      mapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}/@${lat},${lng},14z`;
+    }
     this.updateWorkerStatus(workerId, `Opening feed: "${searchQuery}"`);
 
     try {
@@ -557,7 +564,6 @@ class MultiWorkerScraper {
 
       this.updateWorkerStatus(workerId, `Scanning listings: "${searchQuery}"`);
 
-      // Extract all valid place items currently visible in feed with high precision
       const placeItems = await workerPage.evaluate(() => {
         const feed = document.querySelector('div[role="feed"]') || document.body;
         const cards = Array.from(feed.querySelectorAll('div.Nv2PK, div[role="article"]'));
@@ -570,7 +576,6 @@ class MultiWorkerScraper {
           const href = link.getAttribute('href') || '';
           if (!href) return;
 
-          // Extract business name from headline element or aria-label
           const headlineEl = card.querySelector('div.fontHeadlineSmall, div.qBF1Pd, span.OSrA2b');
           let name = headlineEl ? headlineEl.innerText.trim() : (link.getAttribute('aria-label') || '').trim();
           if (!name || name.toLowerCase() === 'results') {
@@ -639,7 +644,6 @@ class MultiWorkerScraper {
 
         let detail = null;
         try {
-          // Navigate directly to dedicated place page (google.com/maps/place/BusinessName/...)
           await workerPage.goto(item.url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => { });
           await Promise.race([
             workerPage.waitForSelector('h1', { timeout: 4000 }),
@@ -649,20 +653,17 @@ class MultiWorkerScraper {
           ]).catch(() => { });
           await new Promise(r => setTimeout(r, 1200));
 
-          // Extract complete details from the dedicated Google Maps place page
           detail = await workerPage.evaluate((bName, cRating, cReviews, cPhone, cWebsite) => {
             const body = document.body;
             const mainPane = body.querySelector('div[role="main"]') || body.querySelector('div.m6QErb') || body;
             const fullText = body.innerText || '';
 
-            // 1. Business Name (from H1 on place page)
             const h1El = body.querySelector('h1.DUwfe, h1');
             let officialName = h1El ? h1El.innerText.trim() : '';
             if (!officialName || officialName.toLowerCase() === 'results') {
               officialName = bName;
             }
 
-            // 2. Address Row (Location Pin Icon)
             let address = null;
             const addressBtn = body.querySelector('button[data-item-id="address"], button[aria-label*="Address"], button[aria-label*="address"]');
             if (addressBtn) {
@@ -670,10 +671,7 @@ class MultiWorkerScraper {
               address = aria.replace(/^Address:\s*/i, '').trim() || addressBtn.innerText.trim();
             }
 
-            // 3. Phone Extraction (All DOM buttons, text rows, aria-labels & tooltip attributes)
             let rawPhoneCandidate = null;
-
-            // Check explicit Phone elements
             const phoneEls = Array.from(body.querySelectorAll('button[data-item-id*="phone"], [data-item-id*="phone"], button[aria-label*="Phone"], button[aria-label*="phone"], button[aria-label*="Call"], button[aria-label*="Mobile"], button[data-tooltip*="phone"], button[data-tooltip*="Phone"], button[data-tooltip*="Call"], a[href^="tel:"], [data-item-id^="phone"]'));
             for (const el of phoneEls) {
               const dataId = el.getAttribute('data-item-id') || '';
@@ -700,7 +698,6 @@ class MultiWorkerScraper {
               }
             }
 
-            // Check all info text rows (div.Io6YTe, button.Csj9le)
             if (!rawPhoneCandidate) {
               const ioRows = Array.from(body.querySelectorAll('div.Io6YTe, button.Csj9le, button[data-item-id], [aria-label]'));
               for (const row of ioRows) {
@@ -713,18 +710,15 @@ class MultiWorkerScraper {
               }
             }
 
-            // Match regex in full body text
             if (!rawPhoneCandidate) {
               const phoneMatch = fullText.match(/(?:0|\+?91)?[-.\s]?[6-9]\d{4}[-.\s]?\d{5}|0\d{2,4}[-.\s]?\d{6,8}/);
               if (phoneMatch) rawPhoneCandidate = phoneMatch[0];
             }
 
-            // Fallback to card phone candidate if place DOM was empty
             if (!rawPhoneCandidate && cPhone) {
               rawPhoneCandidate = cPhone;
             }
 
-            // 4. Website Row (Comprehensive extraction across all DOM structures)
             let websiteUrl = cWebsite || null;
 
             if (!websiteUrl) {
@@ -750,7 +744,6 @@ class MultiWorkerScraper {
 
             const hasWebsiteLink = !!websiteUrl;
 
-            // 5. Opening Hours Row (Clock Icon)
             let openingHours = null;
             const hoursBtn = body.querySelector('button[data-item-id*="oh"], div[aria-label*="Hours"], div[aria-label*="Open"], div[aria-label*="Closed"]');
             if (hoursBtn) {
@@ -758,7 +751,6 @@ class MultiWorkerScraper {
               openingHours = aria.replace(/^Hours:\s*/i, '').replace(/^Opening hours:\s*/i, '').trim() || hoursBtn.innerText.trim();
             }
 
-            // 6. Plus Code Row (Grid Icon)
             let plusCode = null;
             const plusCodeBtn = body.querySelector('button[data-item-id="oloc"]');
             if (plusCodeBtn) {
@@ -766,7 +758,6 @@ class MultiWorkerScraper {
               plusCode = aria.replace(/^Plus code:\s*/i, '').trim() || plusCodeBtn.innerText.trim();
             }
 
-            // 7. Rating & Reviews
             let rating = null;
             let reviews = null;
             const ratingEl = body.querySelector('div.F7v250 span[aria-hidden="true"], span.MW4et');
@@ -789,12 +780,10 @@ class MultiWorkerScraper {
             }
             if (!reviews && cReviews) reviews = cReviews;
 
-            // 8. Price Range (Money Icon)
             let priceRange = null;
             const priceMatch = fullText.match(/(?:₹|\$|€|£)[\d,–\s]+per person/i) || fullText.match(/(?:₹|\$|€|£){1,4}/);
             if (priceMatch) priceRange = priceMatch[0];
 
-            // 9. Category
             let categoryText = null;
             const catBtn = body.querySelector('button[jsaction*="category"], button.Dkftq');
             if (catBtn) categoryText = catBtn.innerText.trim();
@@ -815,7 +804,6 @@ class MultiWorkerScraper {
             };
           }, item.name, item.cardRating, item.cardReviews, item.cardPhone, item.cardWebsite);
 
-          // Return to search results feed page
           await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => { });
           await new Promise(r => setTimeout(r, 1200));
         } catch (err) {
@@ -859,10 +847,23 @@ class MultiWorkerScraper {
           continue;
         }
 
+        const targetCityName = (this.config.location || '').split(',')[0].trim().toLowerCase();
+        if (targetCityName && targetCityName.length >= 3 && detail.address) {
+          const addrLower = detail.address.toLowerCase();
+          if (!targetCityName.includes('ahmedabad') && addrLower.includes('ahmedabad') && !addrLower.includes(targetCityName)) {
+            scanStats.skippedCount++;
+            io.emit('lead_skipped', {
+              name: detail.name,
+              reason: `Outside target location (${targetCityName} requested, found ${detail.address})`
+            });
+            this.updateWorkerProgress(workerId, scanStats.scannedCount);
+            continue;
+          }
+        }
+
         let phoneClean = extractValidPhone(detail.rawPhoneCandidate, item.cardSnippet || detail.rawText);
         let emailFound = extractEmails(detail.rawText)[0] || null;
 
-        // Try website contact page first if domain exists
         if (detail.websiteUrl && (!phoneClean || !emailFound)) {
           this.updateWorkerStatus(workerId, `Scraping website: "${item.name.substring(0, 18)}..."`);
           const webContact = await scrapeWebsiteContact(detail.websiteUrl);
@@ -870,7 +871,6 @@ class MultiWorkerScraper {
           if (!phoneClean && webContact.phone) phoneClean = webContact.phone;
         }
 
-        // Automatic Web Deep Search fallback if phone or email still missing
         if (!phoneClean || !emailFound) {
           this.updateWorkerStatus(workerId, `Deep web search for contact: "${item.name.substring(0, 18)}..."`);
           const deepData = await deepSearchContact(detail.name, this.config.location);
@@ -927,7 +927,6 @@ class MultiWorkerScraper {
         break;
       }
 
-      // Scroll down workerPage continuously to load more listings in the feed
       const isEnd = await workerPage.evaluate(() => {
         const feed = document.querySelector('div[role="feed"]') || document.querySelector('div[tabindex="-1"]');
         if (feed) {
@@ -972,6 +971,10 @@ app.post('/api/start-scan', async (req, res) => {
   }
 
   const config = req.body;
+  lastScanMeta = {
+    category: config.category || 'Leads',
+    location: config.location || 'Area'
+  };
   currentLeads = [];
   scanStats = {
     scannedCount: 0,
@@ -1044,9 +1047,270 @@ app.post('/api/test-n8n', async (req, res) => {
   }
 });
 
+// In-memory Geocoding Cache (5 min TTL)
+const geocodeCache = new Map();
+function getCachedGeocode(key) {
+  const item = geocodeCache.get(key);
+  if (item && Date.now() - item.ts < 300000) return item.data;
+  if (item) geocodeCache.delete(key);
+  return null;
+}
+function setCachedGeocode(key, data) {
+  if (geocodeCache.size > 200) {
+    const firstKey = geocodeCache.keys().next().value;
+    geocodeCache.delete(firstKey);
+  }
+  geocodeCache.set(key, { ts: Date.now(), data });
+}
+
+// Geocoding Proxy & Autocomplete Search Endpoint
+app.get('/api/geocode/search', async (req, res) => {
+  const query = (req.query.q || '').trim();
+  const lat = req.query.lat ? parseFloat(req.query.lat) : null;
+  const lng = req.query.lng ? parseFloat(req.query.lng) : null;
+
+  if (!query) {
+    return res.json({ results: [] });
+  }
+
+  const cacheKey = `search_${query.toLowerCase()}_${lat || ''}_${lng || ''}`;
+  const cached = getCachedGeocode(cacheKey);
+  if (cached) {
+    return res.json({ results: cached });
+  }
+
+  try {
+    const results = [];
+    const seen = new Set();
+
+    // 1. Query Photon API (Komoot - fast, fuzzy autocomplete & proximity bias)
+    try {
+      let photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=10`;
+      if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
+        photonUrl += `&lat=${lat}&lon=${lng}`;
+      }
+      const photonRes = await axios.get(photonUrl, {
+        headers: { 'Accept': 'application/json' },
+        timeout: 5000
+      });
+
+      if (photonRes.data && Array.isArray(photonRes.data.features)) {
+        for (const f of photonRes.data.features) {
+          const p = f.properties || {};
+          const coords = f.geometry && f.geometry.coordinates;
+          if (!coords || coords.length < 2) continue;
+
+          const itemLat = parseFloat(coords[1]);
+          const itemLng = parseFloat(coords[0]);
+          const name = p.name || query;
+          const parts = [
+            name,
+            p.district || p.suburb || p.neighbourhood || p.street,
+            p.city || p.town,
+            p.state,
+            p.country
+          ].filter(Boolean);
+          const displayName = Array.from(new Set(parts)).join(', ');
+          const coordKey = `${itemLat.toFixed(3)},${itemLng.toFixed(3)}`;
+
+          if (!seen.has(coordKey) && !seen.has(displayName.toLowerCase())) {
+            seen.add(coordKey);
+            seen.add(displayName.toLowerCase());
+            results.push({
+              id: p.osm_id || `${itemLat}_${itemLng}`,
+              name: name,
+              displayName: displayName,
+              suburb: p.suburb || p.district || p.neighbourhood || '',
+              city: p.city || p.town || p.county || '',
+              state: p.state || '',
+              country: p.country || '',
+              lat: itemLat,
+              lng: itemLng,
+              type: p.type || p.osm_value || 'area',
+              source: 'photon'
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Photon geocode search failed:', err.message);
+    }
+
+    // 2. Fallback to OpenStreetMap Nominatim if results are sparse or Photon failed
+    if (results.length < 3) {
+      try {
+        const nomRes = await axios.get('https://nominatim.openstreetmap.org/search', {
+          params: {
+            format: 'json',
+            q: query,
+            limit: 8,
+            addressdetails: 1
+          },
+          headers: {
+            'User-Agent': 'LeadGeneratorApp/2.0 (contact: admin@leadgen.local)'
+          },
+          timeout: 6000
+        });
+
+        if (Array.isArray(nomRes.data)) {
+          for (const item of nomRes.data) {
+            const itemLat = parseFloat(item.lat);
+            const itemLng = parseFloat(item.lon);
+            const coordKey = `${itemLat.toFixed(3)},${itemLng.toFixed(3)}`;
+            const addr = item.address || {};
+            const name = item.name || query;
+            const parts = [
+              name,
+              addr.suburb || addr.neighbourhood || addr.residential || addr.road,
+              addr.city || addr.town || addr.village || addr.county,
+              addr.state,
+              addr.country
+            ].filter(Boolean);
+            const displayName = Array.from(new Set(parts)).join(', ') || item.display_name;
+
+            if (!seen.has(coordKey) && !seen.has(displayName.toLowerCase())) {
+              seen.add(coordKey);
+              seen.add(displayName.toLowerCase());
+              results.push({
+                id: item.place_id || `${itemLat}_${itemLng}`,
+                name: name,
+                displayName: displayName,
+                suburb: addr.suburb || addr.neighbourhood || '',
+                city: addr.city || addr.town || addr.village || '',
+                state: addr.state || '',
+                country: addr.country || '',
+                lat: itemLat,
+                lng: itemLng,
+                type: item.type || item.class || 'area',
+                source: 'nominatim'
+              });
+            }
+          }
+        }
+      } catch (nomErr) {
+        console.warn('Nominatim fallback failed:', nomErr.message);
+      }
+    }
+
+    setCachedGeocode(cacheKey, results);
+    res.json({ results });
+  } catch (err) {
+    res.status(500).json({ error: err.message, results: [] });
+  }
+});
+
+// Reverse Geocoding Endpoint
+app.get('/api/geocode/reverse', async (req, res) => {
+  const lat = parseFloat(req.query.lat);
+  const lng = parseFloat(req.query.lng);
+
+  if (isNaN(lat) || isNaN(lng)) {
+    return res.status(400).json({ error: 'Valid lat and lng query params are required' });
+  }
+
+  const cacheKey = `reverse_${lat.toFixed(4)}_${lng.toFixed(4)}`;
+  const cached = getCachedGeocode(cacheKey);
+  if (cached) {
+    return res.json(cached);
+  }
+
+  try {
+    // 1. Try Photon reverse
+    try {
+      const photonRes = await axios.get(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}`, {
+        headers: { 'Accept': 'application/json' },
+        timeout: 5000
+      });
+      if (photonRes.data && Array.isArray(photonRes.data.features) && photonRes.data.features.length > 0) {
+        const p = photonRes.data.features[0].properties || {};
+        const parts = [
+          p.name,
+          p.district || p.suburb || p.neighbourhood || p.street,
+          p.city || p.town,
+          p.state,
+          p.country
+        ].filter(Boolean);
+        const displayName = Array.from(new Set(parts)).join(', ');
+        const result = {
+          success: true,
+          name: p.name || `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+          displayName: displayName || `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+          suburb: p.suburb || p.district || p.neighbourhood || '',
+          city: p.city || p.town || p.county || '',
+          state: p.state || '',
+          country: p.country || '',
+          lat,
+          lng,
+          source: 'photon'
+        };
+        setCachedGeocode(cacheKey, result);
+        return res.json(result);
+      }
+    } catch (e) {
+      console.warn('Photon reverse failed, trying Nominatim fallback:', e.message);
+    }
+
+    // 2. Fallback to Nominatim reverse
+    try {
+      const nomRes = await axios.get('https://nominatim.openstreetmap.org/reverse', {
+        params: {
+          format: 'json',
+          lat,
+          lon: lng,
+          addressdetails: 1
+        },
+        headers: {
+          'User-Agent': 'LeadGeneratorApp/2.0 (contact: admin@leadgen.local)'
+        },
+        timeout: 5000
+      });
+
+      if (nomRes.data) {
+        const addr = nomRes.data.address || {};
+        const name = nomRes.data.name || addr.suburb || addr.neighbourhood || addr.city || addr.town;
+        const parts = [
+          name,
+          addr.suburb || addr.neighbourhood,
+          addr.city || addr.town || addr.village,
+          addr.state,
+          addr.country
+        ].filter(Boolean);
+
+        const result = {
+          success: true,
+          name: name || `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+          displayName: Array.from(new Set(parts)).join(', ') || nomRes.data.display_name,
+          suburb: addr.suburb || addr.neighbourhood || '',
+          city: addr.city || addr.town || addr.village || '',
+          state: addr.state || '',
+          country: addr.country || '',
+          lat,
+          lng,
+          source: 'nominatim'
+        };
+        setCachedGeocode(cacheKey, result);
+        return res.json(result);
+      }
+    } catch (nomErr) {
+      console.warn('Nominatim reverse fallback failed:', nomErr.message);
+    }
+
+    const fallbackResult = {
+      success: true,
+      name: `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+      displayName: `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+      lat,
+      lng
+    };
+    res.json(fallbackResult);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // CSV Export Endpoint
 app.get('/api/export/csv', (req, res) => {
-  const headers = ['ID', 'Business Name', 'Phone Number', 'Email', 'Has Website', 'Website URL', 'Rating', 'Reviews', 'Address', 'Category', 'Opening Hours', 'Price Range', 'Plus Code', 'Google Maps Link', 'Scraped At'];
+  const headers = ['ID', 'Business Name', 'Phone Number', 'Email', 'Has Website', 'Website URL', 'Rating', 'Address', 'Category', 'Opening Hours', 'Price Range', 'Plus Code', 'Google Maps Link', 'Scraped At'];
   const rows = currentLeads.map(l => [
     `"${l.id}"`,
     `"${(l.name || '').replace(/"/g, '""')}"`,
@@ -1055,7 +1319,6 @@ app.get('/api/export/csv', (req, res) => {
     `"${l.hasWebsite ? 'Yes' : 'No'}"`,
     `"${(l.websiteUrl || '').replace(/"/g, '""')}"`,
     `"${l.rating}"`,
-    `"${l.reviews}"`,
     `"${(l.address || '').replace(/"/g, '""')}"`,
     `"${(l.category || '').replace(/"/g, '""')}"`,
     `"${(l.openingHours || '').replace(/"/g, '""')}"`,
@@ -1066,16 +1329,22 @@ app.get('/api/export/csv', (req, res) => {
   ]);
 
   const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  const sanitize = (str) => (str || '').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_');
+  const cat = sanitize(lastScanMeta.category) || 'Leads';
+  const loc = sanitize((lastScanMeta.location || '').split(',').slice(0, 2).join(' ')) || 'Area';
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const csvFileName = `${cat}_${loc}_${dateStr}.csv`;
+
   res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', 'attachment; filename=google_maps_leads.csv');
+  res.setHeader('Content-Disposition', `attachment; filename="${csvFileName}"`);
   res.status(200).send(csvContent);
 });
 
-// Excel (.xlsx) Export Endpoint with Rich Styling & Executive Theme
+// Excel (.xlsx) Export Endpoint
 app.get('/api/export/excel', async (req, res) => {
   try {
     const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'LeadMap Pro';
+    workbook.creator = 'Google Maps Lead Finder';
     workbook.created = new Date();
 
     const worksheet = workbook.addWorksheet('Qualified Leads', {
@@ -1088,84 +1357,96 @@ app.get('/api/export/excel', async (req, res) => {
     const withPhoneCount = leads.filter(l => l.phone && l.phone !== 'Not Listed').length;
     const withEmailCount = leads.filter(l => l.email && l.email !== 'Not Listed').length;
 
-    // --- 1. BANNER HEADER ---
+    // ROW 1: Title Banner (Merged A1:J1)
     worksheet.mergeCells('A1:J1');
     const titleCell = worksheet.getCell('A1');
-    titleCell.value = 'LEADMAP PRO — QUALIFIED B2B LEADS REPORT';
+    titleCell.value = 'GOOGLE MAPS LEAD SCANNER — QUALIFIED PROSPECTING REPORT';
     titleCell.font = { name: 'Calibri', size: 16, bold: true, color: { argb: 'FFFFFF' } };
-    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0F172A' } };
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1A73E8' } }; // Google Primary Blue
     titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
-    worksheet.getRow(1).height = 32;
+    worksheet.getRow(1).height = 34;
 
+    // ROW 2: Subtitle Banner (Merged A2:J2)
     worksheet.mergeCells('A2:J2');
     const subtitleCell = worksheet.getCell('A2');
-    subtitleCell.value = `Generated on: ${new Date().toLocaleString()} | Verified Business Contacts & Prospecting Data`;
-    subtitleCell.font = { name: 'Calibri', size: 10, italic: true, color: { argb: '94A3B8' } };
-    subtitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E293B' } };
+    subtitleCell.value = `Generated on: ${new Date().toLocaleString()}`;
+    subtitleCell.font = { name: 'Calibri', size: 10, italic: true, color: { argb: '5F6368' } };
+    subtitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F6F3EB' } }; // Warm Off-White Cream
     subtitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
-    worksheet.getRow(2).height = 20;
+    worksheet.getRow(2).height = 22;
 
     worksheet.getRow(3).height = 10;
 
-    // --- 2. SUMMARY METRICS CARDS ---
+    // ROWS 4 & 5: Summary Cards (A-J = 10 columns exact)
     worksheet.mergeCells('A4:C4');
+    worksheet.mergeCells('A5:C5');
     worksheet.mergeCells('D4:F4');
-    worksheet.mergeCells('G4:I4');
-    worksheet.mergeCells('J4:L4');
+    worksheet.mergeCells('D5:F5');
+    worksheet.mergeCells('G4:H4');
+    worksheet.mergeCells('G5:H5');
+    worksheet.mergeCells('I4:J4');
+    worksheet.mergeCells('I5:J5');
 
     const cardConfig = [
-      { cell: 'A4', valCell: 'A5', label: 'TOTAL LEADS EXTRACTED', val: totalLeads, color: '1E293B' },
-      { cell: 'D4', valCell: 'D5', label: 'NO-WEBSITE PROSPECTS', val: `${noWebsiteCount} (${Math.round((noWebsiteCount / totalLeads) * 100 || 0)}%)`, color: '166534' },
-      { cell: 'G4', valCell: 'G5', label: 'PHONE NUMBERS FOUND', val: `${withPhoneCount}`, color: '1E40AF' },
-      { cell: 'J4', valCell: 'J5', label: 'EMAILS EXTRACTED', val: `${withEmailCount}`, color: '6B21A8' }
+      { cell: 'A4', valCell: 'A5', label: 'EXTRACTED LEADS', val: totalLeads, color: '137333', bg: 'E6F4EA', border: 'CEEAD6' },
+      { cell: 'D4', valCell: 'D5', label: 'PHONE NUMBERS FOUND', val: `${withPhoneCount}`, color: '1A73E8', bg: 'E8F0FE', border: 'D2E3FC' },
+      { cell: 'G4', valCell: 'G5', label: 'NO-WEBSITE PROSPECTS', val: `${noWebsiteCount} (${Math.round((noWebsiteCount / totalLeads) * 100 || 0)}%)`, color: 'B06000', bg: 'FEF7E0', border: 'FEEFC3' },
+      { cell: 'I4', valCell: 'I5', label: 'EMAILS FOUND', val: `${withEmailCount}`, color: 'C5221F', bg: 'FCE8E6', border: 'FAD2CF' }
     ];
 
     worksheet.getRow(4).height = 18;
-    worksheet.getRow(5).height = 24;
+    worksheet.getRow(5).height = 26;
 
     cardConfig.forEach(card => {
       const lbl = worksheet.getCell(card.cell);
       lbl.value = card.label;
-      lbl.font = { name: 'Calibri', size: 9, bold: true, color: { argb: '64748B' } };
-      lbl.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F8FAFC' } };
+      lbl.font = { name: 'Calibri', size: 9, bold: true, color: { argb: '5F6368' } };
+      lbl.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: card.bg } };
       lbl.alignment = { horizontal: 'center', vertical: 'middle' };
 
       const val = worksheet.getCell(card.valCell);
       val.value = card.val;
-      val.font = { name: 'Calibri', size: 14, bold: true, color: { argb: card.color } };
-      val.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F8FAFC' } };
+      val.font = { name: 'Calibri', size: 15, bold: true, color: { argb: card.color } };
+      val.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: card.bg } };
       val.alignment = { horizontal: 'center', vertical: 'middle' };
 
       [card.cell, card.valCell].forEach(c => {
         worksheet.getCell(c).border = {
-          top: { style: 'thin', color: { argb: 'CBD5E1' } },
-          bottom: { style: 'thin', color: { argb: 'CBD5E1' } },
-          left: { style: 'thin', color: { argb: 'CBD5E1' } },
-          right: { style: 'thin', color: { argb: 'CBD5E1' } }
+          top: { style: 'thin', color: { argb: card.border } },
+          bottom: { style: 'thin', color: { argb: card.border } },
+          left: { style: 'thin', color: { argb: card.border } },
+          right: { style: 'thin', color: { argb: card.border } }
         };
       });
     });
 
     worksheet.getRow(6).height = 12;
 
-    // --- 3. DATA COLUMNS ---
+    // ROW 7: Table Headers
     const headers = [
       '#',
       'Business Name',
       'Phone Number',
       'Email Address',
-      'Has Website?',
+      'Website Status',
       'Website URL',
       'Category',
       'Rating',
-      'Reviews',
-      'Full Address'
+      'Full Address',
+      'Google Maps Link'
     ];
 
     const colWidths = [
-      { wch: 6 }, { wch: 32 }, { wch: 22 }, { wch: 30 },
-      { wch: 24 }, { wch: 38 }, { wch: 26 }, { wch: 10 },
-      { wch: 14 }, { wch: 45 }
+      { wch: 6 },   // #
+      { wch: 32 },  // Business Name
+      { wch: 20 },  // Phone Number
+      { wch: 28 },  // Email Address
+      { wch: 20 },  // Website Status
+      { wch: 32 },  // Website URL
+      { wch: 24 },  // Category
+      { wch: 10 },  // Rating
+      { wch: 42 },  // Full Address
+      { wch: 22 }   // Google Maps Link
     ];
 
     colWidths.forEach((col, idx) => {
@@ -1178,129 +1459,157 @@ app.get('/api/export/excel', async (req, res) => {
 
     headerRow.eachCell((cell) => {
       cell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FFFFFF' } };
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E293B' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1A73E8' } }; // Google Blue Header
       cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
       cell.border = {
-        top: { style: 'medium', color: { argb: '0F172A' } },
-        bottom: { style: 'medium', color: { argb: '0F172A' } },
-        left: { style: 'thin', color: { argb: '334155' } },
-        right: { style: 'thin', color: { argb: '334155' } }
+        top: { style: 'medium', color: { argb: '1557B0' } },
+        bottom: { style: 'medium', color: { argb: '1557B0' } },
+        left: { style: 'thin', color: { argb: '4285F4' } },
+        right: { style: 'thin', color: { argb: '4285F4' } }
       };
     });
 
-    // --- 4. DATA ROWS ---
+    // DATA ROWS (Row 8+)
     leads.forEach((lead, idx) => {
       const rowNum = 8 + idx;
       const row = worksheet.getRow(rowNum);
       row.height = 24;
 
       const hasWeb = !!lead.hasWebsite;
-      const webText = hasWeb ? 'Yes' : 'No (Qualified Prospect)';
+      const webStatusText = hasWeb ? 'HAS WEBSITE' : '🚫 NO WEBSITE';
       const phoneVal = lead.phone || 'Not Listed';
       const emailVal = lead.email || 'Not Listed';
       const webUrlVal = lead.websiteUrl || 'No Website';
       const ratingVal = lead.rating ? `${lead.rating} ★` : 'N/A';
+      const mapUrl = lead.placeUrl || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lead.name || ''} ${lead.address || ''}`.trim())}`;
 
       row.values = [
         idx + 1,
         lead.name || 'N/A',
         phoneVal,
         emailVal,
-        webText,
+        webStatusText,
         webUrlVal,
         lead.category || 'N/A',
         ratingVal,
-        lead.reviews || '0',
-        lead.address || 'N/A'
+        lead.address || 'N/A',
+        ''
       ];
 
       const isEven = idx % 2 === 0;
-      const rowBgColor = isEven ? 'FFFFFF' : 'F8FAFC';
+      const rowBgColor = isEven ? 'FFFFFF' : 'FBF8F2';
 
       row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-        cell.font = { name: 'Calibri', size: 10, color: { argb: '1E293B' } };
+        cell.font = { name: 'Calibri', size: 10, color: { argb: '1F2937' } };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowBgColor } };
         cell.alignment = { vertical: 'middle', wrapText: false };
         cell.border = {
-          top: { style: 'thin', color: { argb: 'E2E8F0' } },
-          bottom: { style: 'thin', color: { argb: 'E2E8F0' } },
-          left: { style: 'thin', color: { argb: 'E2E8F0' } },
-          right: { style: 'thin', color: { argb: 'E2E8F0' } }
+          top: { style: 'thin', color: { argb: 'E6E0D4' } },
+          bottom: { style: 'thin', color: { argb: 'E6E0D4' } },
+          left: { style: 'thin', color: { argb: 'E6E0D4' } },
+          right: { style: 'thin', color: { argb: 'E6E0D4' } }
         };
 
-        if ([1, 5, 8, 9].includes(colNumber)) {
+        if ([1, 5, 8, 10].includes(colNumber)) {
           cell.alignment = { horizontal: 'center', vertical: 'middle' };
         }
 
         if (colNumber === 1) {
-          cell.font = { name: 'Calibri', size: 9, color: { argb: '64748B' }, bold: true };
+          cell.font = { name: 'Calibri', size: 9, color: { argb: '6B7280' }, bold: true };
         }
         if (colNumber === 2) {
-          cell.font = { name: 'Calibri', size: 10.5, bold: true, color: { argb: '0F172A' } };
+          cell.font = { name: 'Calibri', size: 10.5, bold: true, color: { argb: '111827' } };
         }
         if (colNumber === 3) {
           if (phoneVal !== 'Not Listed') {
-            cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: '0F172A' } };
+            cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: '111827' } };
           } else {
-            cell.font = { name: 'Calibri', size: 9.5, italic: true, color: { argb: '94A3B8' } };
-            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isEven ? 'FEFCE8' : 'FEF9C3' } };
+            cell.font = { name: 'Calibri', size: 9.5, italic: true, color: { argb: '9CA3AF' } };
           }
         }
         if (colNumber === 4) {
           if (emailVal !== 'Not Listed') {
-            cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: '1D4ED8' } };
+            const safeEmail = emailVal.replace(/"/g, '""');
+            cell.value = {
+              formula: `HYPERLINK("mailto:${safeEmail}", "${safeEmail}")`,
+              result: emailVal
+            };
+            cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: '1A73E8' }, underline: true };
           } else {
-            cell.font = { name: 'Calibri', size: 9.5, italic: true, color: { argb: '94A3B8' } };
+            cell.value = 'Not Listed';
+            cell.font = { name: 'Calibri', size: 9.5, italic: true, color: { argb: '9CA3AF' } };
           }
         }
         if (colNumber === 5) {
           if (!hasWeb) {
-            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'DCFCE7' } };
-            cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: '15803D' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FCE8E6' } };
+            cell.font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: 'EA4335' } };
           } else {
-            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F1F5F9' } };
-            cell.font = { name: 'Calibri', size: 9.5, color: { argb: '475569' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'E6F4EA' } };
+            cell.font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: '34A853' } };
           }
         }
         if (colNumber === 6) {
           if (hasWeb && webUrlVal !== 'No Website') {
-            cell.font = { name: 'Calibri', size: 9.5, color: { argb: '2563EB' }, underline: true };
+            const targetWebUrl = webUrlVal.startsWith('http') ? webUrlVal : `https://${webUrlVal}`;
+            const safeWebUrl = targetWebUrl.replace(/"/g, '""');
+            const safeWebText = webUrlVal.replace(/"/g, '""');
+            cell.value = {
+              formula: `HYPERLINK("${safeWebUrl}", "${safeWebText}")`,
+              result: webUrlVal
+            };
+            cell.font = { name: 'Calibri', size: 9.5, color: { argb: '1A73E8' }, underline: true };
           } else {
-            cell.font = { name: 'Calibri', size: 9.5, italic: true, color: { argb: '94A3B8' } };
+            cell.value = 'No Website';
+            cell.font = { name: 'Calibri', size: 9.5, italic: true, color: { argb: '9CA3AF' } };
           }
         }
         if (colNumber === 8) {
           if (lead.rating && parseFloat(lead.rating) >= 4.0) {
-            cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'A16207' } };
-            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FEF9C3' } };
+            cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'B06000' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FEF7E0' } };
           }
         }
       });
+
+      const mapCell = row.getCell(10);
+      const safeMapUrl = mapUrl.replace(/"/g, '""');
+      mapCell.value = {
+        formula: `HYPERLINK("${safeMapUrl}", "Open Location Pin 📍")`,
+        result: 'Open Location Pin 📍'
+      };
+      mapCell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: '1A73E8' }, underline: true };
+      mapCell.alignment = { horizontal: 'center', vertical: 'middle' };
     });
 
-    // --- 5. SUMMARY FOOTER ---
     const lastDataRow = 7 + leads.length;
     const footerRow = worksheet.getRow(lastDataRow + 1);
     footerRow.height = 28;
 
     worksheet.mergeCells(`A${lastDataRow + 1}:D${lastDataRow + 1}`);
     const summaryCell = worksheet.getCell(`A${lastDataRow + 1}`);
-    summaryCell.value = `TOTAL RECORDS: ${leads.length} LEADS | QUALIFIED PROSPECTS: ${noWebsiteCount}`;
-    summaryCell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: '0F172A' } };
+    summaryCell.value = `TOTAL RECORDS: ${leads.length} LEADS | NO-WEBSITE PROSPECTS: ${noWebsiteCount}`;
+    summaryCell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: '1F2937' } };
     summaryCell.alignment = { horizontal: 'left', vertical: 'middle' };
 
     for (let c = 1; c <= 10; c++) {
       const cell = footerRow.getCell(c);
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'E2E8F0' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F6F3EB' } };
       cell.border = {
-        top: { style: 'double', color: { argb: '0F172A' } },
-        bottom: { style: 'medium', color: { argb: '0F172A' } }
+        top: { style: 'double', color: { argb: '1A73E8' } },
+        bottom: { style: 'medium', color: { argb: '1A73E8' } }
       };
     }
 
     const buffer = await workbook.xlsx.writeBuffer();
+    const sanitize = (str) => (str || '').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_');
+    const cat = sanitize(lastScanMeta.category) || 'Leads';
+    const loc = sanitize((lastScanMeta.location || '').split(',').slice(0, 2).join(' ')) || 'Area';
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const excelFileName = `${cat}_${loc}_${dateStr}.xlsx`;
+
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename=google_maps_leads.xlsx');
+    res.setHeader('Content-Disposition', `attachment; filename="${excelFileName}"`);
     res.status(200).send(Buffer.from(buffer));
   } catch (err) {
     console.error('Error generating styled Excel file:', err);
@@ -1315,11 +1624,20 @@ io.on('connection', (socket) => {
   socket.emit('initial_leads', currentLeads);
 });
 
-// Vite Static Serve handling for Production / Preview mode
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, 'dist')));
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+// Static frontend build handling if frontend/dist exists
+const frontendDistPath = path.join(__dirname, '../frontend/dist');
+const localDistPath = path.join(__dirname, 'dist');
+if (fs.existsSync(frontendDistPath)) {
+  app.use(express.static(frontendDistPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(frontendDistPath, 'index.html'));
+  });
+} else if (fs.existsSync(localDistPath)) {
+  app.use(express.static(localDistPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(localDistPath, 'index.html'));
   });
 }
 
@@ -1330,8 +1648,8 @@ server.on('error', (err) => {
     console.warn(`⚠️ Port ${DEFAULT_PORT} is in use. Retrying in 1 second...`);
     setTimeout(() => {
       server.close();
-      server.listen(DEFAULT_PORT, () => {
-        console.log(`🚀 Google Maps Lead Generator Server running on http://localhost:${DEFAULT_PORT}`);
+      server.listen(DEFAULT_PORT, '0.0.0.0', () => {
+        console.log(`🚀 Google Maps Lead Generator Server running on http://0.0.0.0:${DEFAULT_PORT}`);
       });
     }, 1000);
   } else {
@@ -1339,8 +1657,8 @@ server.on('error', (err) => {
   }
 });
 
-server.listen(DEFAULT_PORT, () => {
-  console.log(`🚀 Google Maps Lead Generator Server running on http://localhost:${DEFAULT_PORT}`);
+server.listen(DEFAULT_PORT, '0.0.0.0', () => {
+  console.log(`🚀 Lead Generator Backend Server running on http://0.0.0.0:${DEFAULT_PORT}`);
 });
 
 async function cleanupProcesses() {
@@ -1356,4 +1674,3 @@ process.on('SIGTERM', async () => {
   await cleanupProcesses();
   process.exit(0);
 });
-

@@ -1,0 +1,175 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --google-blue: #1a73e8;
+    --google-blue-hover: #1557b0;
+    --google-red: #ea4335;
+    --google-yellow: #fbbc05;
+    --google-green: #34a853;
+
+    /* Warm Yellowish Off-White Canvas (Soft Cream / Vanilla Non-Bright) */
+    --google-offwhite-bg: #f6f3eb;
+    --google-card-bg: #ffffff;
+    --google-card-border: #e6e0d4;
+    --google-text-main: #1f2937;
+    --google-text-sub: #6b7280;
+  }
+
+  body {
+    background-color: var(--google-offwhite-bg);
+    color: var(--google-text-main);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    overflow-x: hidden;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Inter', system-ui, sans-serif;
+    letter-spacing: -0.015em;
+  }
+}
+
+/* Warm Off-White Cream Cards */
+.google-card {
+  background: #ffffff;
+  border: 1px solid #e6e0d4;
+  border-radius: 1.25rem;
+  box-shadow: 0 1px 4px rgba(80, 70, 50, 0.05), 0 2px 8px rgba(80, 70, 50, 0.04);
+  transition: all 0.2s ease-in-out;
+}
+
+.google-card:hover {
+  box-shadow: 0 4px 14px rgba(80, 70, 50, 0.08), 0 1px 4px rgba(80, 70, 50, 0.06);
+}
+
+/* Google 4-Color Top Accent Line */
+.google-color-bar {
+  background: linear-gradient(
+    90deg,
+    #4285f4 0%, #4285f4 25%,
+    #ea4335 25%, #ea4335 50%,
+    #fbbc05 50%, #fbbc05 75%,
+    #34a853 75%, #34a853 100%
+  );
+  height: 4px;
+}
+
+/* ULTRA HIGH-VISIBILITY SEARCH LEADS CTA BUTTON */
+.search-leads-cta-btn {
+  background: linear-gradient(135deg, #1a73e8 0%, #0d5bcc 100%);
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 0.9375rem; /* 15px */
+  letter-spacing: -0.01em;
+  border-radius: 9999px;
+  border: 2px solid #ffffff;
+  box-shadow: 0 4px 18px rgba(26, 115, 232, 0.45);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.search-leads-cta-btn:hover {
+  background: linear-gradient(135deg, #1557b0 0%, #0a47a3 100%);
+  box-shadow: 0 6px 24px rgba(26, 115, 232, 0.6);
+  transform: translateY(-1.5px) scale(1.01);
+}
+
+.search-leads-cta-btn:active {
+  transform: translateY(0) scale(0.99);
+}
+
+/* Standard Buttons */
+.google-btn-blue {
+  background-color: #1a73e8;
+  color: #ffffff;
+  font-weight: 700;
+  border-radius: 9999px;
+  box-shadow: 0 2px 6px rgba(26, 115, 232, 0.3);
+  transition: all 0.15s ease-in-out;
+}
+.google-btn-blue:hover {
+  background-color: #1557b0;
+  box-shadow: 0 4px 10px rgba(26, 115, 232, 0.4);
+}
+
+.google-btn-green {
+  background-color: #34a853;
+  color: #ffffff;
+  font-weight: 700;
+  border-radius: 9999px;
+  box-shadow: 0 2px 6px rgba(52, 168, 83, 0.3);
+  transition: all 0.15s ease-in-out;
+}
+.google-btn-green:hover {
+  background-color: #2d9247;
+  box-shadow: 0 4px 10px rgba(52, 168, 83, 0.4);
+}
+
+/* Leaflet Container */
+.leaflet-container {
+  border-radius: 1rem;
+  z-index: 10;
+  background: #f4efe6 !important;
+}
+
+.leaflet-popup-content-wrapper {
+  background: #ffffff !important;
+  color: #1f2937 !important;
+  border: 1px solid #e6e0d4;
+  border-radius: 0.85rem;
+  box-shadow: 0 4px 16px rgba(80, 70, 50, 0.12);
+}
+
+/* Radar Marker Pulse */
+@keyframes radar-pulse-google {
+  0% {
+    transform: scale(0.5);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(2.2);
+    opacity: 0.35;
+  }
+  100% {
+    transform: scale(3.2);
+    opacity: 0;
+  }
+}
+
+.radar-marker-ring-google {
+  width: 38px;
+  height: 38px;
+  background: rgba(26, 115, 232, 0.25);
+  border: 2px solid rgba(26, 115, 232, 0.9);
+  border-radius: 50%;
+  position: absolute;
+  top: -9px;
+  left: -9px;
+  animation: radar-pulse-google 2s infinite ease-out;
+  pointer-events: none;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f6f3eb;
+}
+::-webkit-scrollbar-thumb {
+  background: #d6cfc0;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #1a73e8;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

@@ -7,7 +7,11 @@ const DEFAULT_PRESETS = [
   { id: 'restaurant', label: 'Restaurants', query: 'Restaurant & Cafe' },
   { id: 'realestate', label: 'Real Estate', query: 'Real Estate Agency' },
   { id: 'webdev', label: 'Web Dev', query: 'Web Design & Software Agency' },
-  { id: 'gyms', label: 'Gyms & Fitness', query: 'Gym & Fitness Center' }
+  { id: 'gyms', label: 'Gyms & Fitness', query: 'Gym & Fitness Center' },
+  { id: 'electrician', label: 'Electricians', query: 'Electrical Contractor' },
+  { id: 'hvac', label: 'HVAC Services', query: 'AC Repair & HVAC Services' },
+  { id: 'auto', label: 'Car Repair', query: 'Auto Repair & Garage' },
+  { id: 'lawyer', label: 'Lawyers', query: 'Law Firm & Advocate' }
 ];
 
 export default function CategorySelector({ selectedCategory, onSelectCategory, customCategory, onCustomCategoryChange }) {
@@ -19,7 +23,6 @@ export default function CategorySelector({ selectedCategory, onSelectCategory, c
     const trimmed = inputText.trim();
     if (!trimmed) return;
 
-    // Check if category already exists
     const existing = presets.find(
       (p) => p.label.toLowerCase() === trimmed.toLowerCase() || p.query.toLowerCase() === trimmed.toLowerCase()
     );
@@ -56,38 +59,36 @@ export default function CategorySelector({ selectedCategory, onSelectCategory, c
   };
 
   return (
-    <div className="space-y-2.5">
-      <label className="text-xs font-semibold text-zinc-300 tracking-tight flex items-center justify-between">
-        <span className="flex items-center gap-1.5">
-          <Briefcase className="w-4 h-4 text-zinc-100" />
-          Business Category / Niche
+    <div className="space-y-3">
+      <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+        <label className="text-xs font-bold text-gray-800 tracking-tight flex items-center gap-1.5">
+          <Briefcase className="w-4 h-4 text-[#1a73e8]" />
+          <span>Business Category / Niche</span>
+        </label>
+        <span className="text-[11px] text-gray-500 font-sans">
+          Selected: <strong className="text-[#1a73e8]">{selectedCategory || 'None'}</strong>
         </span>
-        <span className="text-[11px] text-zinc-500 font-mono">
-          Selected: <span className="text-zinc-200 font-bold">{selectedCategory || 'None'}</span>
-        </span>
-      </label>
+      </div>
 
-      {/* Input Form with Add Button */}
       <form onSubmit={handleAddCategory} className="relative flex items-center">
         <input
           type="text"
           value={inputText}
           onChange={handleInputChange}
-          placeholder="Type custom category & press Enter or + Add..."
-          className="w-full bg-zinc-950 text-zinc-100 placeholder-zinc-500 text-xs rounded-lg pl-3 pr-20 py-2 border border-zinc-800 focus:border-zinc-500 outline-none transition font-medium"
+          placeholder="Search or type custom niche (e.g. Roofers, Bakeries, Photographers)..."
+          className="w-full bg-white text-gray-900 placeholder-gray-400 text-xs rounded-full pl-4 pr-20 py-2.5 border border-gray-300 focus:border-[#1a73e8] focus:ring-2 focus:ring-[#1a73e8]/20 outline-none transition font-medium shadow-sm"
         />
         <button
           type="submit"
           disabled={!inputText.trim()}
-          className="absolute right-1 px-2.5 py-1 bg-zinc-100 hover:bg-white disabled:opacity-40 text-zinc-950 font-bold text-xs rounded transition flex items-center gap-1 cursor-pointer"
+          className="absolute right-1 px-3 py-1.5 google-btn text-xs rounded-full cursor-pointer flex items-center gap-1 shadow-sm disabled:opacity-40"
         >
           <Plus className="w-3.5 h-3.5" />
           Add
         </button>
       </form>
 
-      {/* Preset Chips */}
-      <div className="flex flex-wrap gap-1.5 pt-0.5">
+      <div className="flex flex-wrap gap-1.5 pt-0.5 max-h-36 overflow-y-auto no-scrollbar">
         {presets.map((cat) => {
           const isSelected = selectedCategory === cat.query && !inputText.trim();
           return (
@@ -99,18 +100,18 @@ export default function CategorySelector({ selectedCategory, onSelectCategory, c
                 onCustomCategoryChange('');
                 onSelectCategory(cat.query);
               }}
-              className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all flex items-center gap-1.5 cursor-pointer ${
                 isSelected
-                  ? 'bg-zinc-100 text-zinc-950 border-zinc-100 font-bold'
-                  : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-100 hover:border-zinc-700'
+                  ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-bold shadow-sm'
+                  : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
               }`}
             >
               <span>{cat.label}</span>
               {cat.isCustom && (
                 <span
                   onClick={(e) => handleRemoveCustomPreset(e, cat.id)}
-                  className="hover:text-rose-500 text-zinc-500 p-0.5 rounded transition"
-                  title="Remove category"
+                  className="hover:text-red-500 text-gray-400 p-0.5 rounded transition"
+                  title="Remove"
                 >
                   <X className="w-3 h-3" />
                 </span>
@@ -122,5 +123,3 @@ export default function CategorySelector({ selectedCategory, onSelectCategory, c
     </div>
   );
 }
-
-
