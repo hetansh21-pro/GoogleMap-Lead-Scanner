@@ -292,16 +292,27 @@ async function sendToN8nWebhook(webhookUrl, leadData) {
   }
 }
 
-// Helper: Detect Chrome/Chromium Binary
+// Helper: Detect Chrome/Chromium Binary across Linux, macOS, and Windows
 function getChromeExecutablePath() {
   if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) {
     return process.env.CHROME_PATH;
   }
   const paths = [
+    // Linux
     '/usr/bin/google-chrome',
     '/usr/bin/google-chrome-stable',
     '/usr/bin/chromium',
-    '/usr/bin/chromium-browser'
+    '/usr/bin/chromium-browser',
+    '/snap/bin/chromium',
+    // macOS
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    // Windows
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    ...(process.env.LOCALAPPDATA ? [`${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`] : []),
+    ...(process.env.PROGRAMFILES ? [`${process.env.PROGRAMFILES}\\Google\\Chrome\\Application\\chrome.exe`] : []),
+    ...(process.env['PROGRAMFILES(X86)'] ? [`${process.env['PROGRAMFILES(X86)']}\\Google\\Chrome\\Application\\chrome.exe`] : [])
   ];
   for (const p of paths) {
     if (fs.existsSync(p)) return p;
