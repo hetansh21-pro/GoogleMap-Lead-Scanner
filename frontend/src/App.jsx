@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { MapPin, FileSpreadsheet, CheckCircle2, Search } from 'lucide-react';
+import logoImg from './assets/logo.png';
 import MapSelector from './components/MapSelector';
 import CategorySelector from './components/CategorySelector';
 import ScraperControls from './components/ScraperControls';
@@ -31,7 +32,7 @@ export default function App() {
   const [customCategory, setCustomCategory] = useState('');
 
   const [config, setConfig] = useState({
-    workerCount: 3,
+    workerCount: 2, // Eco & balanced default (light on RAM)
     websiteFilter: 'all', // 'all' | 'no_website' | 'has_website'
     onlyNoWebsite: false,
     deepExtraction: true,
@@ -56,6 +57,10 @@ export default function App() {
   }, [autoExcelDownload]);
 
   const [leads, setLeads] = useState([]);
+  const leadBufferRef = useRef([]);
+  const flushTimerRef = useRef(null);
+  const notificationTimerRef = useRef(null);
+
   const [stats, setStats] = useState({
     scannedCount: 0,
     qualifiedCount: 0,
@@ -78,6 +83,7 @@ export default function App() {
     });
 
     socket.on('initial_leads', (initialLeads) => {
+      leadBufferRef.current = [];
       setLeads(initialLeads || []);
     });
 
@@ -85,26 +91,51 @@ export default function App() {
       setStats(updatedStats);
     });
 
+    // Batched updates: Buffers incoming leads and flushes smoothly every 400ms
+    // Prevents UI freezes and 100% CPU lockup when hundreds of leads arrive
     socket.on('lead_found', (newLead) => {
-      setLeads((prev) => [newLead, ...prev]);
-      showNotification(`New Lead: ${newLead.name}`, 'success');
+      leadBufferRef.current.push(newLead);
+      if (!flushTimerRef.current) {
+        flushTimerRef.current = setTimeout(() => {
+          if (leadBufferRef.current.length > 0) {
+            const batch = [...leadBufferRef.current];
+            leadBufferRef.current = [];
+            setLeads((prev) => [...batch.reverse(), ...prev]);
+          }
+          flushTimerRef.current = null;
+        }, 400);
+      }
     });
 
     socket.on('scan_completed', ({ leads: finalLeads, stats: finalStats, category: completedCat, location: completedLoc }) => {
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+      leadBufferRef.current = [];
+      if (finalLeads) {
+        setLeads(finalLeads);
+      }
       setStats(finalStats);
-      showNotification(`Completed! Extracted ${finalLeads.length} leads.`, 'info');
+      showNotification(`Scan Completed! Found ${finalLeads ? finalLeads.length : 0} qualified leads.`, 'info');
 
       if (autoExcelDownloadRef.current && finalLeads && finalLeads.length > 0) {
         const cat = completedCat || activeScanParamsRef.current.category;
         const loc = completedLoc || activeScanParamsRef.current.location;
         setTimeout(() => {
           downloadExcel(finalLeads, { category: cat, location: loc });
-          showNotification(`Downloaded Excel for ${cat} (${loc})`, 'success');
+          showNotification(`Auto-downloaded Excel report for ${cat}`, 'success');
         }, 500);
       }
     });
 
     return () => {
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+      }
+      if (notificationTimerRef.current) {
+        clearTimeout(notificationTimerRef.current);
+      }
       socket.off('connect');
       socket.off('disconnect');
       socket.off('initial_leads');
@@ -115,8 +146,14 @@ export default function App() {
   }, []);
 
   const showNotification = (msg, type = 'info') => {
+    if (notificationTimerRef.current) {
+      clearTimeout(notificationTimerRef.current);
+    }
     setNotification({ msg, type });
-    setTimeout(() => setNotification(null), 4000);
+    notificationTimerRef.current = setTimeout(() => {
+      setNotification(null);
+      notificationTimerRef.current = null;
+    }, 4000);
   };
 
   const handleConfigChange = (key, value) => {
@@ -268,8 +305,8 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-3 sm:px-4 py-2 sm:py-3 flex items-center justify-between gap-2 sm:gap-3">
           {/* Logo with Google Colors */}
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-[#4285f4] to-[#1a73e8] text-white flex items-center justify-center font-bold shadow-sm shrink-0">
-              <MapPin className="w-4 h-4 sm:w-5 sm:h-5" />
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-white border border-[#e2ddd0] p-1 flex items-center justify-center shadow-xs shrink-0 hover:shadow-md transition-shadow">
+              <img src={logoImg} alt="Google Maps Lead Scanner Logo" className="w-full h-full object-contain" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">

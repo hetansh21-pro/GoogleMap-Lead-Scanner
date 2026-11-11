@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Download,
   FileSpreadsheet,
@@ -14,7 +14,11 @@ import {
   ExternalLink,
   Info,
   Database,
-  MapPin
+  MapPin,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight
 } from 'lucide-react';
 
 export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onExportJSON, onSendSingleN8n }) {
@@ -22,6 +26,8 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
   const [filterType, setFilterType] = useState('all');
   const [copiedId, setCopiedId] = useState(null);
   const [selectedLeadModal, setSelectedLeadModal] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
   const handleCopyText = (text, id) => {
     navigator.clipboard.writeText(text);
@@ -37,23 +43,46 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
   };
 
-  const filteredLeads = leads.filter((lead) => {
-    const matchesSearch =
-      (lead.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (lead.phone || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (lead.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (lead.address || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (lead.category || '').toLowerCase().includes(searchTerm.toLowerCase());
+  const filteredLeads = useMemo(() => {
+    return leads.filter((lead) => {
+      const matchesSearch =
+        (lead.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (lead.phone || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (lead.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (lead.address || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (lead.category || '').toLowerCase().includes(searchTerm.toLowerCase());
 
-    if (!matchesSearch) return false;
+      if (!matchesSearch) return false;
 
-    if (filterType === 'no-website') return !lead.hasWebsite;
-    if (filterType === 'has-website') return lead.hasWebsite;
-    if (filterType === 'has-phone') return lead.phone && lead.phone !== 'Not Listed';
-    if (filterType === 'has-email') return lead.email && lead.email !== 'Not Listed';
+      if (filterType === 'no-website') return !lead.hasWebsite;
+      if (filterType === 'has-website') return lead.hasWebsite;
+      if (filterType === 'has-phone') return lead.phone && lead.phone !== 'Not Listed';
+      if (filterType === 'has-email') return lead.email && lead.email !== 'Not Listed';
 
-    return true;
-  });
+      return true;
+    });
+  }, [leads, searchTerm, filterType]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredLeads.length / pageSize));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = (safePage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, filteredLeads.length);
+  const paginatedLeads = filteredLeads.slice(startIndex, endIndex);
+
+  const handleSearchChange = (val) => {
+    setSearchTerm(val);
+    setCurrentPage(1);
+  };
+
+  const handleFilterChange = (val) => {
+    setFilterType(val);
+    setCurrentPage(1);
+  };
+
+  const handlePageSizeChange = (newSize) => {
+    setPageSize(newSize);
+    setCurrentPage(1);
+  };
 
   return (
     <div className="google-card p-4 sm:p-5 space-y-4 shadow-sm">
@@ -111,7 +140,7 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
           <input
             type="text"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="Search leads by name, phone, email, address..."
             className="w-full bg-white text-gray-900 text-xs rounded-full pl-9 pr-3 py-2 border border-gray-300 focus:border-[#1a73e8] outline-none shadow-sm"
           />
@@ -120,7 +149,7 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
         <div className="flex items-center gap-1.5 w-full md:w-auto overflow-x-auto text-xs no-scrollbar py-0.5">
           <Filter className="w-3.5 h-3.5 text-gray-400 mr-1 shrink-0" />
           <button
-            onClick={() => setFilterType('all')}
+            onClick={() => handleFilterChange('all')}
             className={`px-3 py-1 rounded-full border transition text-xs whitespace-nowrap cursor-pointer ${
               filterType === 'all'
                 ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-bold'
@@ -130,7 +159,7 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
             All Leads
           </button>
           <button
-            onClick={() => setFilterType('no-website')}
+            onClick={() => handleFilterChange('no-website')}
             className={`px-3 py-1 rounded-full border transition text-xs whitespace-nowrap cursor-pointer ${
               filterType === 'no-website'
                 ? 'bg-[#ea4335] text-white border-[#ea4335] font-bold'
@@ -140,7 +169,7 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
             🚫 No Website
           </button>
           <button
-            onClick={() => setFilterType('has-website')}
+            onClick={() => handleFilterChange('has-website')}
             className={`px-3 py-1 rounded-full border transition text-xs whitespace-nowrap cursor-pointer ${
               filterType === 'has-website'
                 ? 'bg-[#34a853] text-white border-[#34a853] font-bold'
@@ -150,7 +179,7 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
             🔗 Has Website
           </button>
           <button
-            onClick={() => setFilterType('has-phone')}
+            onClick={() => handleFilterChange('has-phone')}
             className={`px-3 py-1 rounded-full border transition text-xs whitespace-nowrap cursor-pointer ${
               filterType === 'has-phone'
                 ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-bold'
@@ -169,7 +198,7 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
             No leads captured yet. Start a search to see results.
           </div>
         ) : (
-          filteredLeads.map((lead) => {
+          paginatedLeads.map((lead) => {
             const hasPhone = lead.phone && lead.phone !== 'Not Listed';
             const hasEmail = lead.email && lead.email !== 'Not Listed';
             const mapUrl = getGoogleMapsUrl(lead);
@@ -309,7 +338,7 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
                 </td>
               </tr>
             ) : (
-              filteredLeads.map((lead) => {
+              paginatedLeads.map((lead) => {
                 const hasPhone = lead.phone && lead.phone !== 'Not Listed';
                 const hasEmail = lead.email && lead.email !== 'Not Listed';
                 const mapUrl = getGoogleMapsUrl(lead);
@@ -426,6 +455,78 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
           </tbody>
         </table>
       </div>
+
+      {/* PAGINATION BAR (Ultra-Low DOM Memory Footprint) */}
+      {filteredLeads.length > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-gray-100 text-xs text-gray-600">
+          <div className="flex items-center gap-2">
+            <span>
+              Showing <span className="font-bold text-gray-900">{startIndex + 1}</span> to{' '}
+              <span className="font-bold text-gray-900">{endIndex}</span> of{' '}
+              <span className="font-bold text-gray-900">{filteredLeads.length}</span> leads
+            </span>
+            <span className="text-gray-300">|</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-500 text-[11px]">Per page:</span>
+              {[25, 50, 100].map((sz) => (
+                <button
+                  key={sz}
+                  onClick={() => handlePageSizeChange(sz)}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition cursor-pointer ${
+                    pageSize === sz
+                      ? 'bg-[#1a73e8] text-white border-[#1a73e8]'
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  {sz}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setCurrentPage(1)}
+              disabled={safePage === 1}
+              className="p-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition"
+              title="First Page"
+            >
+              <ChevronsLeft className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={safePage === 1}
+              className="p-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition flex items-center gap-1"
+              title="Previous Page"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline text-xs font-medium">Prev</span>
+            </button>
+
+            <span className="px-3 py-1 rounded-lg bg-gray-100 text-gray-800 font-bold text-xs border border-gray-200">
+              Page {safePage} of {totalPages}
+            </span>
+
+            <button
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage === totalPages}
+              className="p-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition flex items-center gap-1"
+              title="Next Page"
+            >
+              <span className="hidden sm:inline text-xs font-medium">Next</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={safePage === totalPages}
+              className="p-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition"
+              title="Last Page"
+            >
+              <ChevronsRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* LEAD DETAILS MODAL */}
       {selectedLeadModal && (

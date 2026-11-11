@@ -304,12 +304,16 @@ function getChromeExecutablePath() {
     '/usr/bin/chromium',
     '/usr/bin/chromium-browser',
     '/snap/bin/chromium',
+    '/usr/bin/brave-browser',
+    '/opt/brave.com/brave/brave',
     // macOS
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
     // Windows
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
     ...(process.env.LOCALAPPDATA ? [`${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`] : []),
     ...(process.env.PROGRAMFILES ? [`${process.env.PROGRAMFILES}\\Google\\Chrome\\Application\\chrome.exe`] : []),
     ...(process.env['PROGRAMFILES(X86)'] ? [`${process.env['PROGRAMFILES(X86)']}\\Google\\Chrome\\Application\\chrome.exe`] : [])
@@ -320,12 +324,13 @@ function getChromeExecutablePath() {
   return undefined;
 }
 
-// Browser Scraper Class (Single Chrome Instance with Parallel Worker Tabs)
+// Browser Scraper Class (Lightweight Multi-Worker with In-Place Extraction & Tab Recycling)
 class MultiWorkerScraper {
   constructor(config) {
     const targetLimit = parseInt(config.targetLeads) || parseInt(config.maxResults) || 100;
     const reqWorkers = parseInt(config.workerCount) || 2;
-    const effectiveWorkers = Math.min(Math.max(reqWorkers, 1), 32); // Allow up to 32 parallel worker tabs
+    // Cap at 4 max workers: protects low-end hardware from OOM crashes
+    const effectiveWorkers = Math.min(Math.max(reqWorkers, 1), 4);
 
     const websiteFilter = config.websiteFilter || (config.onlyNoWebsite ? 'no_website' : 'all');
     this.config = {
@@ -339,7 +344,7 @@ class MultiWorkerScraper {
       websiteFilter: websiteFilter,
       onlyNoWebsite: websiteFilter === 'no_website',
       deepExtraction: config.deepExtraction ?? true,
-      liveChrome: config.liveChrome ?? true,
+      liveChrome: config.liveChrome ?? false,
       n8nWebhookUrl: config.n8nWebhookUrl || '',
       maxResults: targetLimit,
       targetLeads: targetLimit
@@ -349,6 +354,48 @@ class MultiWorkerScraper {
     this.isPaused = false;
     this.seenNames = new Set();
     this.subQueryQueue = [];
+    this.generatedQueries = new Set();
+  }
+
+  // Create or configure a clean, lightweight Puppeteer page
+  async createNewWorkerPage(workerId, existingPage = null) {
+    if (!this.browser) return null;
+    let page = existingPage;
+    if (!page) {
+      page = await this.browser.newPage();
+    }
+    page.on('error', err => console.error(`Worker ${workerId} page error:`, err.message));
+    page.on('pageerror', () => {});
+
+    try {
+      await page.setRequestInterception(true);
+      page.on('request', (req) => {
+        const resourceType = req.resourceType();
+        const url = req.url().toLowerCase();
+        // Block images, media, fonts, analytics & heavy tracking to keep RAM below ~80MB per tab
+        if (
+          ['image', 'media', 'font'].includes(resourceType) ||
+          url.includes('google-analytics.com') ||
+          url.includes('googletagmanager.com') ||
+          url.includes('doubleclick.net') ||
+          url.endsWith('.png') ||
+          url.endsWith('.jpg') ||
+          url.endsWith('.jpeg') ||
+          url.endsWith('.webp') ||
+          url.endsWith('.woff') ||
+          url.endsWith('.woff2')
+        ) {
+          req.abort();
+        } else {
+          req.continue();
+        }
+      });
+    } catch (e) {}
+
+    await page.setUserAgent(
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    );
+    return page;
   }
 
   async stop() {
@@ -395,7 +442,164 @@ class MultiWorkerScraper {
     queries.push(`${cleanCat} in ${citySimpleName}`);
     queries.push(`${cleanCat} near ${citySimpleName}`);
 
-    return Array.from(new Set(queries));
+    const unique = Array.from(new Set(queries));
+    unique.forEach(q => this.generatedQueries.add(q));
+    return unique;
+  }
+
+  // Dynamic Query Replenishment:
+  // When target is high (e.g. 500, 1000+) and initial sub-queries run low,
+  // automatically inject semantic sub-niches (Cafe, Fast Food, Pure Veg, Dhaba, etc.)
+  // and area grids so the query queue NEVER runs dry until targetLeads is 100% reached!
+  replenishSubQueriesIfLow() {
+    if (this.isStopping || scanStats.qualifiedCount >= this.config.targetLeads) return;
+
+    const { category, location, subLocations } = this.config;
+    const cleanCat = category.trim();
+    const cleanLoc = location.trim();
+    const citySimpleName = cleanLoc.split(',')[0].trim();
+
+    const catLower = cleanCat.toLowerCase();
+    let nicheList = [];
+
+    if (['restaurant', 'cafe', 'food', 'dining', 'eatery', 'bar', 'dhaba', 'bakery', 'kitchen', 'pizza', 'burger', 'sweets'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Cafe', 'Fast Food', 'Pure Veg Restaurant', 'Punjabi Restaurant',
+        'Gujarati Thali Restaurant', 'South Indian Restaurant', 'Pizza Restaurant',
+        'Bakery & Cake Shop', 'Dhaba', 'Family Restaurant', 'Biryani',
+        'Chinese Restaurant', 'Sweet Shop & Farsan', 'Street Food & Snacks',
+        'Rooftop Restro & Cafe', 'North Indian Restaurant', 'Bhojanalay',
+        'Ice Cream Parlour', 'Juice Bar & Shakes', 'Sandwich & Quick Bites'
+      ];
+    } else if (['dentist', 'dental', 'teeth'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Dental Clinic', 'Dentist', 'Orthodontist', 'Dental Surgeon',
+        'Root Canal Specialist', 'Teeth Cleaning & Whitening', 'Pediatric Dentist',
+        'Dental Care Center', 'Cosmetic Dental Clinic'
+      ];
+    } else if (['doctor', 'clinic', 'hospital', 'physician', 'medical'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Clinic', 'Doctor Clinic', 'General Physician', 'Multi Specialty Hospital',
+        'Pediatrician Clinic', 'Dermatologist & Skin Clinic', 'ENT Specialist',
+        'Orthopedic Clinic', 'Diagnostic Center & Pathology Lab', 'Eye Hospital'
+      ];
+    } else if (['gym', 'fitness', 'workout', 'yoga', 'crossfit'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Gym', 'Fitness Club', 'CrossFit Gym', 'Yoga Studio & Classes',
+        'Bodybuilding & Unisex Gym', 'Personal Fitness Training', 'Zumba & Aerobics Center',
+        'Health & Fitness Center', 'Pilates Studio'
+      ];
+    } else if (['real estate', 'property', 'builder', 'broker', 'realtor'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Real Estate Agent', 'Property Dealer', 'Real Estate Consultant',
+        'Property Broker', 'Builders & Developers', 'Commercial Property Consultant',
+        'Residential Real Estate', 'Rental Property Agent'
+      ];
+    } else if (['plumber', 'plumbing'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Plumbing Contractor', 'Plumber', 'Sanitary & Plumbing Services',
+        'Emergency Plumber', 'Bathroom Fitting Services', 'Drain Cleaning Specialist',
+        'Water Tank Cleaning & Repair', 'Pipe Fitting Contractor'
+      ];
+    } else if (['electrician', 'electrical'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Electrical Contractor', 'Electrician', 'Wiring & Lighting Contractor',
+        'Home Electrical Repair', 'Industrial Electrical Services', 'Inverter & Battery Repair',
+        'Emergency Electrician'
+      ];
+    } else if (['hvac', 'ac repair', 'air conditioning', 'cooling'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'AC Repair & Service', 'HVAC Contractor', 'AC Installation & Gas Refill',
+        'Split & Window AC Service', 'Ducting & Central AC Services', 'Refrigerator Repair'
+      ];
+    } else if (['car', 'auto', 'garage', 'mechanic', 'vehicle', 'repair'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Auto Garage', 'Car Service Center', 'Car Mechanic', 'Car AC Repair & Gas',
+        'Car Denting & Painting', 'Wheel Alignment & Balancing', 'Car Wash & Detailing',
+        'Multi Brand Car Workshop', 'Tyre Shop & Service'
+      ];
+    } else if (['lawyer', 'advocate', 'law firm', 'legal', 'attorney'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Advocate', 'Law Firm', 'High Court Advocate', 'Civil Lawyer',
+        'Criminal Defence Lawyer', 'Family Court & Divorce Lawyer', 'Corporate Legal Consultant',
+        'Property Documentation Lawyer', 'Notary Public'
+      ];
+    } else if (['salon', 'spa', 'beauty', 'parlour', 'hair'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Unisex Salon', 'Beauty Parlour', 'Hair Salon & Hair Spa', 'Luxury Day Spa',
+        'Bridal Makeup Artist & Studio', 'Nail Art & Extension Studio', 'Skin Care & Laser Clinic'
+      ];
+    } else if (['web', 'software', 'digital', 'seo', 'it services', 'tech'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Web Design & Development Agency', 'Digital Marketing Company', 'Software Company',
+        'SEO Agency', 'Mobile App Development', 'Social Media Marketing', 'IT Support & Networking'
+      ];
+    } else if (['school', 'coaching', 'classes', 'tuition', 'education', 'academy'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Coaching Classes', 'Tuition Center', 'Commerce & Science Classes',
+        'IELTS & Spoken English Institute', 'CBSE Coaching', 'Pre School & Daycare',
+        'Music & Dance Academy', 'Competitive Exam Coaching'
+      ];
+    } else if (['hotel', 'resort', 'lodge', 'guest house', 'stay'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Budget Hotel', '3 Star Hotel', 'Luxury Boutique Hotel', 'Business Hotel',
+        'Guest House & Lodge', 'Resort', 'Service Apartments', 'Homestay'
+      ];
+    } else if (['photographer', 'photo', 'studio', 'videography'].some(k => catLower.includes(k))) {
+      nicheList = [
+        'Wedding Photographer', 'Photography Studio', 'Pre Wedding Shoot Specialist',
+        'Commercial Product Photographer', 'Maternity & Baby Photographer', 'Videographer'
+      ];
+    } else {
+      nicheList = [
+        `Top ${cleanCat}`, `Best ${cleanCat}`, `${cleanCat} Center`,
+        `${cleanCat} Agency`, `${cleanCat} Store & Showroom`, `${cleanCat} Services`,
+        `Famous ${cleanCat}`, `Affordable ${cleanCat}`, `Professional ${cleanCat}`,
+        `${cleanCat} Dealer & Supplier`, `${cleanCat} Contractor`
+      ];
+    }
+
+    const areas = (Array.isArray(subLocations) && subLocations.length > 0)
+      ? subLocations
+      : [citySimpleName];
+
+    const newQueries = [];
+    for (const niche of nicheList) {
+      for (const area of areas) {
+        let cleanArea = (area || '').trim().replace(/\s*\([^)]*\)/g, '').trim();
+        if (!cleanArea) continue;
+        const q1 = `${niche} in ${cleanArea}, ${citySimpleName}`;
+        if (!this.generatedQueries.has(q1)) {
+          this.generatedQueries.add(q1);
+          newQueries.push(q1);
+        }
+      }
+    }
+
+    // Include Ahmedabad pin-code grids if relevant
+    if (citySimpleName.toLowerCase().includes('ahmedabad')) {
+      const pinGrids = [
+        '380009', '380015', '380052', '380058', '380054', '380008', '380059',
+        '382481', '382350', '382330', '382424', '380007', '380013', '380061'
+      ];
+      for (const pin of pinGrids) {
+        const qPin = `${cleanCat} in Ahmedabad ${pin}`;
+        if (!this.generatedQueries.has(qPin)) {
+          this.generatedQueries.add(qPin);
+          newQueries.push(qPin);
+        }
+      }
+    }
+
+    // Shuffle newly generated queries so multi-workers distribute cleanly across areas
+    for (let i = newQueries.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [newQueries[i], newQueries[j]] = [newQueries[j], newQueries[i]];
+    }
+
+    if (newQueries.length > 0) {
+      this.subQueryQueue.push(...newQueries);
+    }
   }
 
   async run() {
@@ -423,18 +627,22 @@ class MultiWorkerScraper {
         '--disable-dev-shm-usage',
         '--disable-accelerated-2d-canvas',
         '--disable-gpu',
+        '--disable-software-rasterizer',
         '--window-size=1280,800',
         '--lang=en-US',
         '--no-first-run',
         '--no-zygote',
-        '--js-flags=--max-old-space-size=512',
+        '--js-flags=--max-old-space-size=256',
+        '--disk-cache-size=1',
+        '--media-cache-size=1',
+        '--disable-application-cache',
         '--disable-background-networking',
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
         '--disable-breakpad',
         '--disable-component-extensions-with-background-pages',
         '--disable-extensions',
-        '--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints',
+        '--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,CalculateNativeWinOcclusion',
         '--disable-ipc-flooding-protection',
         '--disable-renderer-backgrounding',
         '--mute-audio',
@@ -487,32 +695,10 @@ class MultiWorkerScraper {
       if (!this.browser) return;
 
       this.updateWorkerStatus(workerId, 'Opening Chrome tab...');
-      if (workerIndex === 0 && existingPages && existingPages.length > 0) {
-        workerPage = existingPages[0];
-      } else {
-        workerPage = await this.browser.newPage();
-      }
+      const firstExisting = (workerIndex === 0 && existingPages && existingPages.length > 0) ? existingPages[0] : null;
+      workerPage = await this.createNewWorkerPage(workerId, firstExisting);
 
-      workerPage.on('error', err => console.error(`Worker ${workerId} page error:`, err.message));
-      workerPage.on('pageerror', () => {});
-
-      try {
-        await workerPage.setRequestInterception(true);
-        workerPage.on('request', (req) => {
-          const resourceType = req.resourceType();
-          if (['image', 'media', 'font'].includes(resourceType)) {
-            req.abort();
-          } else {
-            req.continue();
-          }
-        });
-      } catch (e) { }
-
-      await workerPage.setUserAgent(
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-      );
-
-      while (!this.isStopping && scanStats.qualifiedCount < this.config.targetLeads && this.subQueryQueue.length > 0) {
+      while (!this.isStopping && scanStats.qualifiedCount < this.config.targetLeads) {
         if (scanStats.status === 'paused') {
           this.updateWorkerStatus(workerId, 'Paused');
           await new Promise(r => setTimeout(r, 1000));
@@ -525,10 +711,15 @@ class MultiWorkerScraper {
           break;
         }
 
+        // Keep queue replenished so task NEVER terminates early before reaching targetLeads
+        if (this.subQueryQueue.length <= this.config.workerCount * 2) {
+          this.replenishSubQueriesIfLow();
+        }
+
         const searchQuery = this.subQueryQueue.shift();
         if (!searchQuery) break;
 
-        await this.processQuery(workerId, workerPage, searchQuery);
+        workerPage = await this.processQuery(workerId, workerPage, searchQuery);
       }
 
       this.updateWorkerStatus(workerId, `Completed worker tasks`);
@@ -536,29 +727,68 @@ class MultiWorkerScraper {
       console.error(`Worker ${workerId} error:`, err);
       this.updateWorkerStatus(workerId, `Error: ${err.message}`);
     } finally {
-      if (workerPage && workerIndex > 0) {
+      if (workerPage) {
         try { await workerPage.close(); } catch (e) { }
       }
     }
   }
 
   async processQuery(workerId, workerPage, searchQuery) {
-    const { lat, lng } = this.config;
+    const { lat, lng, isBulkMode, subLocations } = this.config;
     let mapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`;
-    if (lat && lng) {
+    // Only lock to specific lat/lng coordinates if NOT in bulk mode and no sub-locations are used.
+    // In bulk mode, each sub-area query (e.g. Bopal, Naroda, Satellite) MUST let Google Maps
+    // naturally center on that neighborhood, otherwise all queries are trapped in the center!
+    const hasSubAreas = (Array.isArray(subLocations) && subLocations.length > 0) || isBulkMode;
+    if (lat && lng && !hasSubAreas) {
       mapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}/@${lat},${lng},14z`;
     }
     this.updateWorkerStatus(workerId, `Opening feed: "${searchQuery}"`);
 
     try {
       await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
-      await new Promise(r => setTimeout(r, 3000));
+      await new Promise(r => setTimeout(r, 2000));
     } catch (e) {
-      return;
+      return workerPage;
+    }
+
+    // PHASE 1: DEEP FEED HARVESTING
+    // Pre-scroll the Google Maps feed 12-15 times to load 40-70+ cards before detail processing
+    this.updateWorkerStatus(workerId, `Harvesting listings feed: "${searchQuery}"...`);
+    let lastHarvestCount = 0;
+    let noNewCardsHarvest = 0;
+    const maxScrolls = 14;
+
+    for (let scrollIdx = 0; scrollIdx < maxScrolls; scrollIdx++) {
+      if (this.isStopping || scanStats.qualifiedCount >= this.config.targetLeads) break;
+
+      const feedInfo = await workerPage.evaluate(() => {
+        const feed = document.querySelector('div[role="feed"]') || document.querySelector('div[tabindex="-1"]');
+        if (feed) {
+          feed.scrollTop = feed.scrollHeight;
+        } else {
+          window.scrollTo(0, document.body.scrollHeight);
+        }
+        const count = document.querySelectorAll('div.Nv2PK, div[role="article"]').length;
+        const reachedEnd = document.body.innerText.includes("You've reached the end of the list");
+        return { count, reachedEnd };
+      }).catch(() => ({ count: 0, reachedEnd: false }));
+
+      if (feedInfo.reachedEnd) break;
+      if (feedInfo.count === lastHarvestCount && feedInfo.count > 0) {
+        noNewCardsHarvest++;
+        if (noNewCardsHarvest >= 3) break;
+      } else {
+        noNewCardsHarvest = 0;
+      }
+      lastHarvestCount = feedInfo.count;
+
+      await new Promise(r => setTimeout(r, 700));
     }
 
     let processedInWorker = 0;
     let emptyPasses = 0;
+    let prevCardCount = 0;
 
     while (!this.isStopping && scanStats.qualifiedCount < this.config.targetLeads) {
       if (scanStats.status === 'paused') {
@@ -651,18 +881,32 @@ class MultiWorkerScraper {
         scanStats.scannedCount++;
         processedInWorker++;
 
-        this.updateWorkerStatus(workerId, `Opening place page: "${item.name.substring(0, 22)}..."`);
+        this.updateWorkerStatus(workerId, `Reading details: "${item.name.substring(0, 22)}..."`);
 
         let detail = null;
         try {
-          await workerPage.goto(item.url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => { });
-          await Promise.race([
-            workerPage.waitForSelector('h1', { timeout: 4000 }),
-            workerPage.waitForSelector('button[data-item-id="address"]', { timeout: 4000 }),
-            workerPage.waitForSelector('button[data-item-id*="phone"]', { timeout: 4000 }),
-            new Promise(r => setTimeout(r, 2000))
-          ]).catch(() => { });
-          await new Promise(r => setTimeout(r, 1200));
+          const clicked = await workerPage.evaluate((targetIndex, targetName) => {
+            const feed = document.querySelector('div[role="feed"]') || document.body;
+            const cards = Array.from(feed.querySelectorAll('div.Nv2PK, div[role="article"]'));
+            let targetCard = cards[targetIndex];
+            if (!targetCard || !targetCard.innerText.includes(targetName)) {
+              targetCard = cards.find(c => (c.innerText || '').includes(targetName)) || targetCard;
+            }
+            if (targetCard) {
+              targetCard.scrollIntoView({ block: 'center' });
+              const link = targetCard.querySelector('a[href*="/maps/place/"]') || targetCard;
+              link.click();
+              return true;
+            }
+            return false;
+          }, item.index, item.name).catch(() => false);
+
+          if (clicked) {
+            await Promise.race([
+              workerPage.waitForSelector('h1.DUwfe, button[data-item-id="address"], button[data-item-id*="phone"]', { timeout: 3500 }),
+              new Promise(r => setTimeout(r, 1200))
+            ]).catch(() => {});
+          }
 
           detail = await workerPage.evaluate((bName, cRating, cReviews, cPhone, cWebsite) => {
             const body = document.body;
@@ -815,24 +1059,32 @@ class MultiWorkerScraper {
             };
           }, item.name, item.cardRating, item.cardReviews, item.cardPhone, item.cardWebsite);
 
-          await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => { });
-          await new Promise(r => setTimeout(r, 1200));
+          // In-page Back to Feed (Fast & keeps feed scroll position intact!)
+          await workerPage.evaluate(() => {
+            const backBtn = document.querySelector('button[aria-label="Back"], button[jsaction*="back"], button[data-tooltip="Back"]');
+            if (backBtn) {
+              backBtn.click();
+            } else {
+              window.history.back();
+            }
+          }).catch(() => {});
+          await workerPage.waitForSelector('div[role="feed"]', { timeout: 3500 }).catch(() => {});
+          await new Promise(r => setTimeout(r, 350));
         } catch (err) {
           detail = {
             name: item.name,
             hasWebsite: !!item.cardWebsite,
             websiteUrl: item.cardWebsite || null,
-            rawPhoneCandidate: null,
+            rawPhoneCandidate: item.cardPhone || null,
             rating: item.cardRating || 'N/A',
             reviews: item.cardReviews || '0',
-            address: null,
+            address: item.cardSnippet ? (item.cardSnippet.split('\n')[1] || this.config.location) : this.config.location,
             categoryText: this.config.category,
             openingHours: 'Not Listed',
             plusCode: 'N/A',
             priceRange: 'N/A',
-            rawText: item.cardSnippet
+            rawText: item.cardSnippet || ''
           };
-          await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => { });
         }
 
         const isNoWebsiteOnly = this.config.websiteFilter === 'no_website' || this.config.onlyNoWebsite;
@@ -925,15 +1177,36 @@ class MultiWorkerScraper {
         if (this.config.n8nWebhookUrl) {
           sendToN8nWebhook(this.config.n8nWebhookUrl, lead);
         }
+
+        // Tab Memory Recycling:
+        // Automatically close and reopen the worker tab every 35 leads
+        // This clears Chromium V8 heap and Blink DOM completely, locking RAM usage below ~100MB
+        if (processedInWorker >= 35) {
+          this.updateWorkerStatus(workerId, '♻️ Recycling tab memory...');
+          try {
+            await workerPage.close();
+          } catch (e) {}
+          workerPage = await this.createNewWorkerPage(workerId);
+          processedInWorker = 0;
+          await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => {});
+          await new Promise(r => setTimeout(r, 1500));
+          await workerPage.evaluate(() => {
+            const feed = document.querySelector('div[role="feed"]');
+            if (feed) feed.scrollTop = feed.scrollHeight;
+          }).catch(() => {});
+          await new Promise(r => setTimeout(r, 800));
+        }
       }
 
-      if (newItemsInPass === 0) {
+      const currentCardCount = placeItems.length;
+      if (currentCardCount <= prevCardCount && newItemsInPass === 0) {
         emptyPasses++;
       } else {
         emptyPasses = 0;
       }
+      prevCardCount = currentCardCount;
 
-      if (emptyPasses >= 5) {
+      if (emptyPasses >= 6) {
         this.updateWorkerStatus(workerId, `Completed area "${searchQuery}". Moving to next area...`);
         break;
       }
@@ -941,20 +1214,23 @@ class MultiWorkerScraper {
       const isEnd = await workerPage.evaluate(() => {
         const feed = document.querySelector('div[role="feed"]') || document.querySelector('div[tabindex="-1"]');
         if (feed) {
+          feed.scrollTop = feed.scrollHeight;
           feed.scrollBy(0, 3500);
         } else {
-          window.scrollBy(0, 3500);
+          window.scrollTo(0, document.body.scrollHeight);
         }
         return document.body.innerText.includes("You've reached the end of the list");
-      });
+      }).catch(() => false);
 
       if (isEnd) {
         this.updateWorkerStatus(workerId, `Reached end of feed for "${searchQuery}"`);
         break;
       }
 
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 1500));
     }
+
+    return workerPage;
   }
 
   updateWorkerStatus(workerId, statusText) {
@@ -994,7 +1270,7 @@ app.post('/api/start-scan', async (req, res) => {
     status: 'running',
     startTime: new Date().toISOString(),
     endTime: null,
-    activeWorkers: Math.min(Math.max(parseInt(config.workerCount) || 3, 1), 32),
+    activeWorkers: Math.min(Math.max(parseInt(config.workerCount) || 2, 1), 4),
     workerDetails: []
   };
 
@@ -1652,7 +1928,7 @@ if (fs.existsSync(frontendDistPath)) {
   });
 }
 
-const DEFAULT_PORT = parseInt(process.env.PORT) || 3001;
+const DEFAULT_PORT = parseInt(process.env.PORT) || 3000;
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
