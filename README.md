@@ -21,6 +21,19 @@
 
 ---
 
+## 📥 Direct Desktop Downloads (No Coding Required!)
+
+Download and run the desktop application directly on your laptop or PC:
+
+| Operating System | Download Link | Quick Start |
+| :--- | :--- | :--- |
+| 🪟 **Windows** (10 / 11) | [**Download Windows Portable (.zip)**](https://github.com/hetansh21-pro/GoogleMap-Lead-Scanner/releases/latest/download/Google-Maps-Lead-Scanner-PRO-3.0.0-win.zip) | Extract the `.zip` and double-click `Google Maps Lead Scanner PRO.exe` |
+| 🐧 **Linux** (Ubuntu, Mint, Debian, Fedora) | [**Download Linux AppImage (.AppImage)**](https://github.com/hetansh21-pro/GoogleMap-Lead-Scanner/releases/latest/download/Google-Maps-Lead-Scanner-PRO-3.0.0.AppImage) | Run `chmod +x *.AppImage` and double-click to open |
+
+👉 **[View All Releases on GitHub](https://github.com/hetansh21-pro/GoogleMap-Lead-Scanner/releases)**
+
+---
+
 ## 📸 Dashboard Showcase
 
 <p align="center">

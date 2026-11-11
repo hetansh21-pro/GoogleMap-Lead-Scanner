@@ -22,6 +22,11 @@
   "build": {
     "appId": "com.leadgenerator.pro",
     "productName": "Google Maps Lead Scanner PRO",
+    "publish": {
+      "provider": "github",
+      "owner": "hetansh21-pro",
+      "repo": "GoogleMap-Lead-Scanner"
+    },
     "directories": {
       "output": "release"
     },
