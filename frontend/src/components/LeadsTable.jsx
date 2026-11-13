@@ -22,6 +22,7 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
   const [filterType, setFilterType] = useState('all');
   const [copiedId, setCopiedId] = useState(null);
   const [selectedLeadModal, setSelectedLeadModal] = useState(null);
+  const [displayLimit, setDisplayLimit] = useState(100);
 
   const handleCopyText = (text, id) => {
     navigator.clipboard.writeText(text);
@@ -54,6 +55,8 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
 
     return true;
   });
+
+  const displayedLeads = displayLimit === 'all' ? filteredLeads : filteredLeads.slice(0, Number(displayLimit) || 100);
 
   return (
     <div className="google-card p-4 sm:p-5 space-y-4 shadow-sm">
@@ -169,7 +172,7 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
             No leads captured yet. Start a search to see results.
           </div>
         ) : (
-          filteredLeads.map((lead) => {
+          displayedLeads.map((lead) => {
             const hasPhone = lead.phone && lead.phone !== 'Not Listed';
             const hasEmail = lead.email && lead.email !== 'Not Listed';
             const mapUrl = getGoogleMapsUrl(lead);
@@ -309,7 +312,7 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
                 </td>
               </tr>
             ) : (
-              filteredLeads.map((lead) => {
+              displayedLeads.map((lead) => {
                 const hasPhone = lead.phone && lead.phone !== 'Not Listed';
                 const hasEmail = lead.email && lead.email !== 'Not Listed';
                 const mapUrl = getGoogleMapsUrl(lead);
@@ -426,6 +429,36 @@ export default function LeadsTable({ leads = [], onExportExcel, onExportCSV, onE
           </tbody>
         </table>
       </div>
+
+      {/* VIEW LIMIT CONTROLS & STATUS */}
+      {filteredLeads.length > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 pt-1 text-xs text-gray-600 border-t border-gray-100">
+          <div>
+            Showing <span className="font-bold text-gray-900">{displayedLeads.length}</span> of{' '}
+            <span className="font-bold text-gray-900">{filteredLeads.length}</span> verified leads
+            {displayLimit !== 'all' && filteredLeads.length > displayLimit && (
+              <span className="ml-1 text-[#1a73e8] font-medium hidden sm:inline">(Optimized for smooth performance)</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-gray-500">Show on screen:</span>
+            {[50, 100, 250, 'all'].map((limit) => (
+              <button
+                key={limit}
+                type="button"
+                onClick={() => setDisplayLimit(limit)}
+                className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border transition cursor-pointer ${
+                  displayLimit === limit
+                    ? 'bg-[#1a73e8] text-white border-[#1a73e8]'
+                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                {limit === 'all' ? 'All' : limit}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* LEAD DETAILS MODAL */}
       {selectedLeadModal && (

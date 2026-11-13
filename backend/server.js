@@ -292,6 +292,16 @@ async function sendToN8nWebhook(webhookUrl, leadData) {
   }
 }
 
+// Continuous Disk Persistence: Auto-save leads to disk so zero data is lost
+const BACKUP_FILE = path.join(__dirname, 'leads_backup.json');
+function saveLeadsBackup(leads) {
+  try {
+    fs.writeFileSync(BACKUP_FILE, JSON.stringify(leads, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Failed to auto-save backup leads:', err.message);
+  }
+}
+
 // Helper: Detect Chrome/Chromium Binary across Linux, macOS, and Windows
 function getChromeExecutablePath() {
   if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) {
@@ -348,7 +358,10 @@ class MultiWorkerScraper {
     this.isStopping = false;
     this.isPaused = false;
     this.seenNames = new Set();
+    this.seenQueries = new Set();
     this.subQueryQueue = [];
+    this.placeQueue = [];
+    this.isHarvestingDone = false;
   }
 
   async stop() {
@@ -395,7 +408,38 @@ class MultiWorkerScraper {
     queries.push(`${cleanCat} in ${citySimpleName}`);
     queries.push(`${cleanCat} near ${citySimpleName}`);
 
-    return Array.from(new Set(queries));
+    const unique = Array.from(new Set(queries));
+    unique.forEach(q => this.seenQueries.add(q));
+    return unique;
+  }
+
+  replenishSubQueries() {
+    const { category, location } = this.config;
+    const cleanCat = category.trim();
+    const cleanLoc = location.trim();
+    const citySimpleName = cleanLoc.split(',')[0].trim();
+
+    const modifiers = [
+      'best', 'top', 'popular', 'famous', 'affordable', 'luxury',
+      'local', 'all', 'new', 'recommended'
+    ];
+    const areas = ['East', 'West', 'North', 'South', 'Central'];
+
+    for (const mod of modifiers) {
+      const q = `${mod} ${cleanCat} in ${citySimpleName}`;
+      if (!this.seenQueries.has(q)) {
+        this.seenQueries.add(q);
+        this.subQueryQueue.push(q);
+      }
+    }
+
+    for (const area of areas) {
+      const q = `${cleanCat} in ${area} ${citySimpleName}`;
+      if (!this.seenQueries.has(q)) {
+        this.seenQueries.add(q);
+        this.subQueryQueue.push(q);
+      }
+    }
   }
 
   async run() {
@@ -407,7 +451,7 @@ class MultiWorkerScraper {
     scanStats.workerDetails = Array.from({ length: workerCount }, (_, i) => ({
       id: i + 1,
       query: this.subQueryQueue[i % this.subQueryQueue.length] || `${category} in ${location}`,
-      status: 'Opening Chrome Window...',
+      status: 'Opening Chrome Tab...',
       scanned: 0,
       qualified: 0
     }));
@@ -428,6 +472,8 @@ class MultiWorkerScraper {
         '--no-first-run',
         '--no-zygote',
         '--js-flags=--max-old-space-size=512',
+        '--disk-cache-size=33554432',
+        '--media-cache-size=16777216',
         '--disable-background-networking',
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
@@ -453,12 +499,14 @@ class MultiWorkerScraper {
     }
 
     const existingPages = await this.browser.pages();
+    const harvesterPage = (existingPages && existingPages.length > 0) ? existingPages[0] : await this.browser.newPage();
 
+    const harvesterPromise = this.runHarvester(harvesterPage);
     const workerPromises = Array.from({ length: workerCount }, (_, workerIndex) => {
-      return this.runWorker(workerIndex, existingPages);
+      return this.runWorker(workerIndex + 1);
     });
 
-    await Promise.allSettled(workerPromises);
+    await Promise.allSettled([harvesterPromise, ...workerPromises]);
 
     if (this.browser) {
       try {
@@ -466,6 +514,8 @@ class MultiWorkerScraper {
       } catch (e) { }
       this.browser = null;
     }
+
+    saveLeadsBackup(currentLeads);
 
     scanStats.status = 'completed';
     scanStats.endTime = new Date().toISOString();
@@ -479,103 +529,78 @@ class MultiWorkerScraper {
     });
   }
 
-  async runWorker(workerIndex, existingPages) {
-    const workerId = workerIndex + 1;
-    let workerPage = null;
-
+  async runHarvester(harvesterPage) {
     try {
-      if (!this.browser) return;
+      harvesterPage.on('error', () => {});
+      harvesterPage.on('pageerror', () => {});
 
-      this.updateWorkerStatus(workerId, 'Opening Chrome tab...');
-      if (workerIndex === 0 && existingPages && existingPages.length > 0) {
-        workerPage = existingPages[0];
-      } else {
-        workerPage = await this.browser.newPage();
-      }
-
-      workerPage.on('error', err => console.error(`Worker ${workerId} page error:`, err.message));
-      workerPage.on('pageerror', () => {});
-
-      try {
-        await workerPage.setRequestInterception(true);
-        workerPage.on('request', (req) => {
-          const resourceType = req.resourceType();
-          if (['image', 'media', 'font'].includes(resourceType)) {
-            req.abort();
-          } else {
-            req.continue();
-          }
-        });
-      } catch (e) { }
-
-      await workerPage.setUserAgent(
+      await harvesterPage.setUserAgent(
         'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
       );
 
-      while (!this.isStopping && scanStats.qualifiedCount < this.config.targetLeads && this.subQueryQueue.length > 0) {
+      while (!this.isStopping && scanStats.qualifiedCount < this.config.targetLeads) {
         if (scanStats.status === 'paused') {
-          this.updateWorkerStatus(workerId, 'Paused');
           await new Promise(r => setTimeout(r, 1000));
           continue;
         }
 
-        if (scanStats.qualifiedCount >= this.config.targetLeads) {
-          this.isStopping = true;
-          this.updateWorkerStatus(workerId, `🎯 Target reached (${scanStats.qualifiedCount}/${this.config.targetLeads})`);
-          break;
+        // Bounded queue: pause harvester if workers haven't processed current backlog
+        if (this.placeQueue.length > 40) {
+          await new Promise(r => setTimeout(r, 1200));
+          continue;
+        }
+
+        if (this.subQueryQueue.length === 0) {
+          this.replenishSubQueries();
+          if (this.subQueryQueue.length === 0) {
+            break;
+          }
         }
 
         const searchQuery = this.subQueryQueue.shift();
         if (!searchQuery) break;
 
-        await this.processQuery(workerId, workerPage, searchQuery);
+        await this.harvestQuery(harvesterPage, searchQuery);
       }
-
-      this.updateWorkerStatus(workerId, `Completed worker tasks`);
     } catch (err) {
-      console.error(`Worker ${workerId} error:`, err);
-      this.updateWorkerStatus(workerId, `Error: ${err.message}`);
+      console.error('Harvester error:', err);
     } finally {
-      if (workerPage && workerIndex > 0) {
-        try { await workerPage.close(); } catch (e) { }
+      this.isHarvestingDone = true;
+      if (harvesterPage) {
+        try { await harvesterPage.close(); } catch (e) {}
       }
     }
   }
 
-  async processQuery(workerId, workerPage, searchQuery) {
+  async harvestQuery(harvesterPage, searchQuery) {
     const { lat, lng } = this.config;
     let mapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`;
     if (lat && lng) {
       mapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}/@${lat},${lng},14z`;
     }
-    this.updateWorkerStatus(workerId, `Opening feed: "${searchQuery}"`);
 
     try {
-      await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
-      await new Promise(r => setTimeout(r, 3000));
+      await harvesterPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
+      await new Promise(r => setTimeout(r, 2500));
     } catch (e) {
       return;
     }
 
-    let processedInWorker = 0;
     let emptyPasses = 0;
+    let passCount = 0;
+    const maxPasses = 15;
 
-    while (!this.isStopping && scanStats.qualifiedCount < this.config.targetLeads) {
+    while (!this.isStopping && scanStats.qualifiedCount < this.config.targetLeads && passCount < maxPasses) {
       if (scanStats.status === 'paused') {
-        this.updateWorkerStatus(workerId, 'Paused');
         await new Promise(r => setTimeout(r, 1000));
         continue;
       }
 
-      if (scanStats.qualifiedCount >= this.config.targetLeads) {
-        this.isStopping = true;
-        this.updateWorkerStatus(workerId, `🎯 Target reached (${scanStats.qualifiedCount}/${this.config.targetLeads})`);
-        break;
+      while (this.placeQueue.length > 40 && !this.isStopping && scanStats.qualifiedCount < this.config.targetLeads) {
+        await new Promise(r => setTimeout(r, 1200));
       }
 
-      this.updateWorkerStatus(workerId, `Scanning listings: "${searchQuery}"`);
-
-      const placeItems = await workerPage.evaluate(() => {
+      const placeItems = await harvesterPage.evaluate(() => {
         const feed = document.querySelector('div[role="feed"]') || document.body;
         const cards = Array.from(feed.querySelectorAll('div.Nv2PK, div[role="article"]'));
 
@@ -636,33 +661,113 @@ class MultiWorkerScraper {
         return items;
       });
 
-      let newItemsInPass = 0;
-
+      let addedThisPass = 0;
       for (const item of placeItems) {
-        if (this.isStopping || scanStats.qualifiedCount >= this.config.targetLeads) break;
-
         const normKey = item.name.toLowerCase().replace(/\s+/g, ' ');
-        if (this.seenNames.has(normKey)) {
+        if (!this.seenNames.has(normKey)) {
+          this.seenNames.add(normKey);
+          this.placeQueue.push({ ...item, searchQuery });
+          addedThisPass++;
+        }
+      }
+
+      if (addedThisPass === 0) {
+        emptyPasses++;
+      } else {
+        emptyPasses = 0;
+      }
+
+      if (emptyPasses >= 4) {
+        break;
+      }
+
+      const isEnd = await harvesterPage.evaluate(() => {
+        const feed = document.querySelector('div[role="feed"]') || document.querySelector('div[tabindex="-1"]');
+        if (feed) {
+          feed.scrollBy(0, 3500);
+        } else {
+          window.scrollBy(0, 3500);
+        }
+        return document.body.innerText.includes("You've reached the end of the list");
+      });
+
+      passCount++;
+      if (isEnd) break;
+      await new Promise(r => setTimeout(r, 1400));
+    }
+  }
+
+  async getNextPlaceItem(workerId) {
+    while (!this.isStopping && scanStats.qualifiedCount < this.config.targetLeads) {
+      if (this.placeQueue.length > 0) {
+        return this.placeQueue.shift();
+      }
+      if (this.isHarvestingDone && this.placeQueue.length === 0) {
+        return null;
+      }
+      this.updateWorkerStatus(workerId, 'Waiting for listings in queue...');
+      await new Promise(r => setTimeout(r, 700));
+    }
+    return null;
+  }
+
+  async runWorker(workerId) {
+    let workerPage = null;
+    let extractedInThisTab = 0;
+
+    const createTab = async () => {
+      const page = await this.browser.newPage();
+      await page.setUserAgent(
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+      );
+      page.on('error', () => {});
+      page.on('pageerror', () => {});
+      try {
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+          const type = req.resourceType();
+          if (['image', 'media'].includes(type)) {
+            req.abort();
+          } else {
+            req.continue();
+          }
+        });
+      } catch (e) {}
+      return page;
+    };
+
+    try {
+      workerPage = await createTab();
+
+      while (!this.isStopping && scanStats.qualifiedCount < this.config.targetLeads) {
+        if (scanStats.status === 'paused') {
+          this.updateWorkerStatus(workerId, 'Paused');
+          await new Promise(r => setTimeout(r, 1000));
           continue;
         }
 
-        this.seenNames.add(normKey);
-        newItemsInPass++;
-        scanStats.scannedCount++;
-        processedInWorker++;
+        const item = await this.getNextPlaceItem(workerId);
+        if (!item) {
+          if (this.isHarvestingDone && this.placeQueue.length === 0) {
+            break;
+          }
+          await new Promise(r => setTimeout(r, 800));
+          continue;
+        }
 
+        scanStats.scannedCount++;
         this.updateWorkerStatus(workerId, `Opening place page: "${item.name.substring(0, 22)}..."`);
 
         let detail = null;
         try {
-          await workerPage.goto(item.url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => { });
+          await workerPage.goto(item.url, { waitUntil: 'domcontentloaded', timeout: 22000 }).catch(() => {});
           await Promise.race([
             workerPage.waitForSelector('h1', { timeout: 4000 }),
             workerPage.waitForSelector('button[data-item-id="address"]', { timeout: 4000 }),
             workerPage.waitForSelector('button[data-item-id*="phone"]', { timeout: 4000 }),
             new Promise(r => setTimeout(r, 2000))
-          ]).catch(() => { });
-          await new Promise(r => setTimeout(r, 1200));
+          ]).catch(() => {});
+          await new Promise(r => setTimeout(r, 1000));
 
           detail = await workerPage.evaluate((bName, cRating, cReviews, cPhone, cWebsite) => {
             const body = document.body;
@@ -746,7 +851,7 @@ class MultiWorkerScraper {
               const links = Array.from(mainPane.querySelectorAll('a[href^="http"]'));
               for (const l of links) {
                 const href = l.getAttribute('href') || l.href || '';
-                if (href && !href.includes('google.com') && !href.includes('google.co') && !href.includes('googleusercontent.com') && !href.includes('ggpht.com') && !href.includes('schema.org') && !href.includes('gstatic.com') && !href.includes('w3.org')) {
+                if (href && !href.includes('google.com') && !href.includes('google.co') && !href.includes('googleusercontent.com') && !href.includes('ggpht.com') && !href.includes('schema.org') && !href.includes('gstatic.com')) {
                   websiteUrl = href;
                   break;
                 }
@@ -814,9 +919,6 @@ class MultiWorkerScraper {
               rawText: fullText.substring(0, 4000)
             };
           }, item.name, item.cardRating, item.cardReviews, item.cardPhone, item.cardWebsite);
-
-          await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => { });
-          await new Promise(r => setTimeout(r, 1200));
         } catch (err) {
           detail = {
             name: item.name,
@@ -832,7 +934,6 @@ class MultiWorkerScraper {
             priceRange: 'N/A',
             rawText: item.cardSnippet
           };
-          await workerPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => { });
         }
 
         const isNoWebsiteOnly = this.config.websiteFilter === 'no_website' || this.config.onlyNoWebsite;
@@ -916,44 +1017,36 @@ class MultiWorkerScraper {
         io.emit('lead_found', lead);
         io.emit('stats_update', scanStats);
 
+        if (this.config.n8nWebhookUrl) {
+          sendToN8nWebhook(this.config.n8nWebhookUrl, lead);
+        }
+
+        // Auto-save backup every 25 leads to prevent data loss
+        if (currentLeads.length % 25 === 0) {
+          saveLeadsBackup(currentLeads);
+        }
+
         if (scanStats.qualifiedCount >= this.config.targetLeads) {
           this.isStopping = true;
           this.updateWorkerStatus(workerId, `🎯 Goal of ${this.config.targetLeads} leads reached! Finishing...`);
           break;
         }
 
-        if (this.config.n8nWebhookUrl) {
-          sendToN8nWebhook(this.config.n8nWebhookUrl, lead);
+        // TAB RECYCLING: Safely close and recreate tab every 25 places to dump Chromium RAM!
+        extractedInThisTab++;
+        if (extractedInThisTab >= 25) {
+          this.updateWorkerStatus(workerId, 'Recycling tab memory (0% RAM leak)...');
+          try { await workerPage.close(); } catch (e) {}
+          workerPage = await createTab();
+          extractedInThisTab = 0;
         }
       }
-
-      if (newItemsInPass === 0) {
-        emptyPasses++;
-      } else {
-        emptyPasses = 0;
+    } catch (err) {
+      console.error(`Worker ${workerId} error:`, err);
+    } finally {
+      if (workerPage) {
+        try { await workerPage.close(); } catch (e) {}
       }
-
-      if (emptyPasses >= 5) {
-        this.updateWorkerStatus(workerId, `Completed area "${searchQuery}". Moving to next area...`);
-        break;
-      }
-
-      const isEnd = await workerPage.evaluate(() => {
-        const feed = document.querySelector('div[role="feed"]') || document.querySelector('div[tabindex="-1"]');
-        if (feed) {
-          feed.scrollBy(0, 3500);
-        } else {
-          window.scrollBy(0, 3500);
-        }
-        return document.body.innerText.includes("You've reached the end of the list");
-      });
-
-      if (isEnd) {
-        this.updateWorkerStatus(workerId, `Reached end of feed for "${searchQuery}"`);
-        break;
-      }
-
-      await new Promise(r => setTimeout(r, 2000));
     }
   }
 

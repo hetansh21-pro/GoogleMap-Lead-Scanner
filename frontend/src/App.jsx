@@ -56,6 +56,9 @@ export default function App() {
   }, [autoExcelDownload]);
 
   const [leads, setLeads] = useState([]);
+  const leadBufferRef = useRef([]);
+  const flushTimerRef = useRef(null);
+  const notificationTimerRef = useRef(null);
   const [stats, setStats] = useState({
     scannedCount: 0,
     qualifiedCount: 0,
@@ -78,6 +81,7 @@ export default function App() {
     });
 
     socket.on('initial_leads', (initialLeads) => {
+      leadBufferRef.current = [];
       setLeads(initialLeads || []);
     });
 
@@ -85,14 +89,33 @@ export default function App() {
       setStats(updatedStats);
     });
 
+    // Batched updates: Buffers incoming leads and flushes smoothly every 300ms
+    // Prevents UI freezes and high CPU churn on low-spec laptops
     socket.on('lead_found', (newLead) => {
-      setLeads((prev) => [newLead, ...prev]);
-      showNotification(`New Lead: ${newLead.name}`, 'success');
+      leadBufferRef.current.push(newLead);
+      if (!flushTimerRef.current) {
+        flushTimerRef.current = setTimeout(() => {
+          if (leadBufferRef.current.length > 0) {
+            const batch = [...leadBufferRef.current];
+            leadBufferRef.current = [];
+            setLeads((prev) => [...batch.reverse(), ...prev]);
+          }
+          flushTimerRef.current = null;
+        }, 300);
+      }
     });
 
     socket.on('scan_completed', ({ leads: finalLeads, stats: finalStats, category: completedCat, location: completedLoc }) => {
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+      leadBufferRef.current = [];
+      if (finalLeads) {
+        setLeads(finalLeads);
+      }
       setStats(finalStats);
-      showNotification(`Completed! Extracted ${finalLeads.length} leads.`, 'info');
+      showNotification(`Completed! Found ${finalLeads ? finalLeads.length : 0} leads.`, 'info');
 
       if (autoExcelDownloadRef.current && finalLeads && finalLeads.length > 0) {
         const cat = completedCat || activeScanParamsRef.current.category;
@@ -105,6 +128,12 @@ export default function App() {
     });
 
     return () => {
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+      }
+      if (notificationTimerRef.current) {
+        clearTimeout(notificationTimerRef.current);
+      }
       socket.off('connect');
       socket.off('disconnect');
       socket.off('initial_leads');
@@ -115,8 +144,14 @@ export default function App() {
   }, []);
 
   const showNotification = (msg, type = 'info') => {
+    if (notificationTimerRef.current) {
+      clearTimeout(notificationTimerRef.current);
+    }
     setNotification({ msg, type });
-    setTimeout(() => setNotification(null), 4000);
+    notificationTimerRef.current = setTimeout(() => {
+      setNotification(null);
+      notificationTimerRef.current = null;
+    }, 4000);
   };
 
   const handleConfigChange = (key, value) => {
