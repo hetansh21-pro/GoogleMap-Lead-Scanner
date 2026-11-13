@@ -242,36 +242,25 @@ export default function ScraperControls({
                     <Cpu className="w-3.5 h-3.5 text-[#1a73e8]" />
                     Parallel Worker Tabs:
                   </span>
-                  <span className="text-[#1a73e8] font-bold">
-                    {config.workerCount} {config.workerCount === 1 ? 'Tab (Eco)' : config.workerCount === 2 ? 'Tabs (Balanced)' : 'Tabs (Turbo)'}
-                  </span>
+                  <span className="text-[#1a73e8] font-bold">{config.workerCount} Tabs</span>
                 </div>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {[
-                    { count: 1, label: '1 (Eco 🌿)', desc: 'Lowest RAM (~250MB) - Smooth on 4GB laptops' },
-                    { count: 2, label: '2 (Balanced ⚡)', desc: 'Recommended sweet spot (~450MB)' },
-                    { count: 3, label: '3 (Fast 🚀)', desc: 'For 8GB+ RAM PCs' },
-                    { count: 4, label: '4 (Turbo 🔥)', desc: 'Maximum parallel speed' }
-                  ].map((tier) => (
+                <div className="flex flex-wrap items-center gap-1">
+                  {[1, 2, 3, 4, 6, 8, 10, 12].map((num) => (
                     <button
-                      key={tier.count}
+                      key={num}
                       type="button"
                       disabled={isRunning}
-                      onClick={() => onChangeConfig('workerCount', tier.count)}
-                      title={tier.desc}
-                      className={`py-1 px-3 rounded-full text-xs font-semibold border transition cursor-pointer ${
-                        config.workerCount === tier.count
-                          ? 'bg-[#1a73e8] text-white border-[#1a73e8] shadow-xs'
+                      onClick={() => onChangeConfig('workerCount', num)}
+                      className={`py-1 px-2.5 rounded-full text-xs font-semibold border transition cursor-pointer ${
+                        config.workerCount === num
+                          ? 'bg-[#1a73e8] text-white border-[#1a73e8]'
                           : 'bg-white border-[#dcd6c8] text-gray-700 hover:bg-gray-50'
                       }`}
                     >
-                      {tier.label}
+                      {num}W
                     </button>
                   ))}
                 </div>
-                <p className="text-[10px] text-gray-500 italic">
-                  💡 Tip: 1-2 tabs use very low memory and run smoothly without any freezing.
-                </p>
               </div>
 
               {/* Show Live Chrome Window ON/OFF Toggle */}
