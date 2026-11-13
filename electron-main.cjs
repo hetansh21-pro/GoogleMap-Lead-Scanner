@@ -9,7 +9,7 @@ app.commandLine.appendSwitch('disable-gpu-sandbox');
 app.commandLine.appendSwitch('disable-dev-shm-usage');
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=512');
 
-const BACKEND_PORT = process.env.PORT || '3000';
+const BACKEND_PORT = process.env.PORT || '3001';
 
 let mainWindow = null;
 let serverProcess = null;

@@ -8,8 +8,8 @@ echo "=================================================="
 echo " 🖥️ Launching Google Maps Lead Scanner Desktop App"
 echo "=================================================="
 
-# Free port 3000 if occupied
-PID=$(lsof -ti:3000 2>/dev/null || true)
+# Free port 3001 if occupied
+PID=$(lsof -ti:3001 2>/dev/null || true)
 if [ -n "$PID" ]; then
   kill -9 $PID 2>/dev/null || true
   sleep 1

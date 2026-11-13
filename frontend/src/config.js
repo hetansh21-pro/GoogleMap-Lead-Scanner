@@ -5,23 +5,19 @@ const getBackendUrl = () => {
     return import.meta.env.VITE_BACKEND_URL;
   }
 
+  // 2. Dynamic host detection (allows mobile phones & other computers on the same network to connect seamlessly)
   if (typeof window !== 'undefined' && window.location) {
-    const { hostname, protocol, port, origin } = window.location;
-
-    // 2. Production or Cloud Deployment (e.g. Render, Railway, VPS, Cloudflare Tunnel):
-    // If we are not running on the Vite dev port (5173), frontend and backend are served from the same domain
-    if (port !== '5173') {
-      return origin;
-    }
-
-    // 3. Local Development: If accessing Vite (5173) from another PC or mobile on local network (e.g. 192.168.x.x)
+    const hostname = window.location.hostname;
+    const protocol = window.location.protocol;
+    
+    // If accessing from another PC or mobile on local network (e.g. 192.168.x.x)
     if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
-      return `${protocol}//${hostname}:3000`;
+      return `${protocol}//${hostname}:3001`;
     }
   }
 
-  // 4. Default local development backend
-  return 'http://localhost:3000';
+  // 3. Fallback to default local backend server port
+  return 'http://localhost:3001';
 };
 
 export const BACKEND_URL = getBackendUrl();
