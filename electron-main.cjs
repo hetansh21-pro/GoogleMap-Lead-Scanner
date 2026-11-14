@@ -1,5 +1,6 @@
 const { app, BrowserWindow, shell } = require("electron");
 const path = require("path");
+const fs = require("fs");
 const { fork } = require("child_process");
 const http = require("http");
 
@@ -102,6 +103,10 @@ function startBackend() {
 }
 
 async function createWindow() {
+  const iconPath = fs.existsSync(path.join(__dirname, 'assets', 'icon.png'))
+    ? path.join(__dirname, 'assets', 'icon.png')
+    : path.join(process.resourcesPath || __dirname, 'assets', 'icon.png');
+
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -109,7 +114,7 @@ async function createWindow() {
     minHeight: 700,
     title: 'Google Maps Lead Scanner PRO',
     backgroundColor: '#f6f3eb',
-    icon: path.join(__dirname, 'assets', 'icon.png'),
+    icon: iconPath,
     autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,

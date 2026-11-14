@@ -581,7 +581,11 @@ class MultiWorkerScraper {
 
     try {
       await harvesterPage.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
-      await new Promise(r => setTimeout(r, 2500));
+      await Promise.race([
+        harvesterPage.waitForSelector('div[role="feed"], div[role="article"], div.Nv2PK', { timeout: 6000 }),
+        new Promise(r => setTimeout(r, 2000))
+      ]).catch(() => {});
+      await new Promise(r => setTimeout(r, 600));
     } catch (e) {
       return;
     }
@@ -693,7 +697,7 @@ class MultiWorkerScraper {
 
       passCount++;
       if (isEnd) break;
-      await new Promise(r => setTimeout(r, 1400));
+      await new Promise(r => setTimeout(r, 800));
     }
   }
 
@@ -706,7 +710,7 @@ class MultiWorkerScraper {
         return null;
       }
       this.updateWorkerStatus(workerId, 'Waiting for listings in queue...');
-      await new Promise(r => setTimeout(r, 700));
+      await new Promise(r => setTimeout(r, 400));
     }
     return null;
   }
@@ -765,9 +769,9 @@ class MultiWorkerScraper {
             workerPage.waitForSelector('h1', { timeout: 4000 }),
             workerPage.waitForSelector('button[data-item-id="address"]', { timeout: 4000 }),
             workerPage.waitForSelector('button[data-item-id*="phone"]', { timeout: 4000 }),
-            new Promise(r => setTimeout(r, 2000))
+            new Promise(r => setTimeout(r, 1500))
           ]).catch(() => {});
-          await new Promise(r => setTimeout(r, 1000));
+          await new Promise(r => setTimeout(r, 400));
 
           detail = await workerPage.evaluate((bName, cRating, cReviews, cPhone, cWebsite) => {
             const body = document.body;

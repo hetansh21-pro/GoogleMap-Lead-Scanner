@@ -1,5 +1,6 @@
 {
   "name": "lead-generator-pro",
+  "desktopName": "lead-generator-pro.desktop",
   "version": "3.0.0",
   "description": "Multi-worker Google Maps Lead Generator (Modularized Architecture)",
   "author": "Hetansh Patel <developer@leadgenerator.com>",

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { MapPin, FileSpreadsheet, CheckCircle2, Search } from 'lucide-react';
+import logoImg from './assets/logo.png';
 import MapSelector from './components/MapSelector';
 import CategorySelector from './components/CategorySelector';
 import ScraperControls from './components/ScraperControls';
@@ -302,9 +303,9 @@ export default function App() {
       <header className="bg-white border-b border-[#e6e0d4] sticky top-0 z-40 shadow-xs">
         <div className="max-w-7xl mx-auto px-3 sm:px-4 py-2 sm:py-3 flex items-center justify-between gap-2 sm:gap-3">
           {/* Logo with Google Colors */}
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-[#4285f4] to-[#1a73e8] text-white flex items-center justify-center font-bold shadow-sm shrink-0">
-              <MapPin className="w-4 h-4 sm:w-5 sm:h-5" />
+          <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
+            <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-white border border-[#e2ddd0] p-1 flex items-center justify-center shadow-xs shrink-0 hover:shadow-md transition-shadow">
+              <img src={logoImg} alt="Google Maps Lead Scanner Logo" className="w-full h-full object-contain" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
